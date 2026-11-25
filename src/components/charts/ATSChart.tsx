@@ -21,6 +21,7 @@ import { cn, formatPrice } from '@/lib/utils';
 import type { ATSUIPreferences } from '@/store/useATSStore';
 import {
   type AssetCategory,
+  type ATSBaseline,
   type OHLCVBar,
   TIMEFRAME_LABELS,
   type TimeframeATSData,
@@ -290,18 +291,7 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       bbCloud?.setData([], false);
     }
 
-    // SAR Wilder AT.S + Setup 1-2-3-4 ("2 billes noires" at M7 & M20)
-    const lastBarTime =
-      data.bars.length > 0 ? data.bars[data.bars.length - 1].time : null;
-    sarPrimitive?.setData(
-      data.parabolicSAR,
-      preferences.showSAR,
-      data.setup1234,
-      lastBarTime,
-      preferences.showDidi
-    );
-
-    // Clear previous Jack/Oggy horizontal lines
+    // Clear previous Jack/Oggy Y-axis price labels
     for (const pl of priceLinesRef.current) {
       try {
         barSeries.removePriceLine(pl);
@@ -311,7 +301,24 @@ export const ATSChart: React.FC<ATSChartProps> = ({
     }
     priceLinesRef.current = [];
 
-    // Strict AT.S Rule: Draw Jack (+1/0/-1) ONLY if proximate AND unpierced (`shouldPlotOnChart`)
+    // Vertical grey dashed origin markers at Jack (t-20) and Oggy (t-7)
+    const originTimes: Array<{ time: string; tag: string }> = [];
+    if (preferences.showJack && data.bars.length > 20) {
+      originTimes.push({
+        time: data.bars[data.bars.length - 1 - 20].time,
+        tag: 'J-20',
+      });
+    }
+    if (preferences.showOggy && data.bars.length > 7) {
+      originTimes.push({
+        time: data.bars[data.bars.length - 1 - 7].time,
+        tag: 'O-7',
+      });
+    }
+
+    // Active unpierced proximate Jack & Oggy horizontal rays (starting at origin bar -> right edge)
+    const activeBaselines: ATSBaseline[] = [];
+
     if (preferences.showJack) {
       const jackEntries = [
         data.Jack.Jack_Minus1,
@@ -320,14 +327,16 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       ];
       for (const line of jackEntries) {
         if (!line || !line.shouldPlotOnChart) continue;
-        const isZero = line.key === 'Jack_0';
+        activeBaselines.push(line);
         const strictColor = line.polarity === 'GREEN' ? '#16a34a' : '#dc2626';
 
+        // Native right Y-axis label only; horizontal ray from origin bar is drawn by canvas primitive
         const created = barSeries.createPriceLine({
           price: line.price,
           color: strictColor,
-          lineWidth: isZero ? 2 : 1,
-          lineStyle: isZero ? LineStyle.Solid : LineStyle.Dashed,
+          lineWidth: 1,
+          lineStyle: LineStyle.Solid,
+          lineVisible: false,
           axisLabelVisible: true,
           title: JACK_SHORT_NAMES[line.key] || line.key,
         });
@@ -335,7 +344,6 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       }
     }
 
-    // Strict AT.S Rule: Draw Oggy (+1/0/-1) ONLY if proximate AND unpierced (`shouldPlotOnChart`)
     if (preferences.showOggy) {
       const oggyEntries = [
         data.Oggy.Oggy_Minus1,
@@ -344,20 +352,34 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       ];
       for (const line of oggyEntries) {
         if (!line || !line.shouldPlotOnChart) continue;
-        const isZero = line.key === 'Oggy_0';
+        activeBaselines.push(line);
         const strictColor = line.polarity === 'GREEN' ? '#16a34a' : '#dc2626';
 
         const created = barSeries.createPriceLine({
           price: line.price,
           color: strictColor,
-          lineWidth: isZero ? 2 : 1,
-          lineStyle: isZero ? LineStyle.Solid : LineStyle.Dotted,
+          lineWidth: 1,
+          lineStyle: LineStyle.Solid,
+          lineVisible: false,
           axisLabelVisible: true,
           title: OGGY_SHORT_NAMES[line.key] || line.key,
         });
         priceLinesRef.current.push(created);
       }
     }
+
+    // SAR Wilder AT.S + Vertical Grey Origin Lines + Horizontal Polarity Rays + Setup 1234 ("2 billes noires")
+    const lastBarTime =
+      data.bars.length > 0 ? data.bars[data.bars.length - 1].time : null;
+    sarPrimitive?.setData({
+      sarPoints: data.parabolicSAR,
+      showSAR: preferences.showSAR,
+      originTimes,
+      activeBaselines,
+      setup1234: data.setup1234,
+      latestBarTime: lastBarTime,
+      showSetupOverlay: preferences.showDidi,
+    });
 
     // Default Viewport: Strictly Last 25 Periods (-25 barres par défaut), zoomable in/out
     const totalBars = data.bars.length;

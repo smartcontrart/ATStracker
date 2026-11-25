@@ -11,12 +11,30 @@ import type {
   SeriesType,
   Time,
 } from 'lightweight-charts';
-import type { ParabolicSARPoint, TimeframeSetup1234 } from '@/types/ats';
+import type {
+  ATSBaseline,
+  ParabolicSARPoint,
+  TimeframeSetup1234,
+} from '@/types/ats';
 
 interface ScreenSARPoint {
   x: number;
   y: number;
   isBullish: boolean;
+}
+
+interface ScreenOriginMarker {
+  x: number;
+  tag: string;
+}
+
+interface ScreenHorizontalRay {
+  xStart: number;
+  hasVisibleOrigin: boolean;
+  y: number;
+  color: string;
+  lineWidth: number;
+  dash: number[];
 }
 
 interface ScreenSetupOverlay {
@@ -29,27 +47,90 @@ interface ScreenSetupOverlay {
   bille2Y: number | null; // SMA 20
 }
 
+type CanvasTarget = {
+  useMediaCoordinateSpace: <T>(
+    cb: (scope: {
+      context: CanvasRenderingContext2D;
+      mediaSize: { width: number; height: number };
+    }) => T
+  ) => T;
+};
+
 class ParabolicSARPaneRenderer implements ISeriesPrimitivePaneRenderer {
   private points: ScreenSARPoint[];
+  private origins: ScreenOriginMarker[];
+  private rays: ScreenHorizontalRay[];
   private setupOverlay: ScreenSetupOverlay | null;
 
   constructor(
     points: ScreenSARPoint[],
+    origins: ScreenOriginMarker[],
+    rays: ScreenHorizontalRay[],
     setupOverlay: ScreenSetupOverlay | null
   ) {
     this.points = points;
+    this.origins = origins;
+    this.rays = rays;
     this.setupOverlay = setupOverlay;
   }
 
-  draw(target: {
-    useMediaCoordinateSpace: <T>(
-      cb: (scope: { context: CanvasRenderingContext2D }) => T
-    ) => T;
-  }): void {
-    target.useMediaCoordinateSpace(({ context }) => {
+  /**
+   * Draws vertical grey dashed lines at Jack (t-20) and Oggy (t-7) origins
+   * behind the OHLC bars, matching the TradingView AT.S visual reference.
+   */
+  drawBackground(target: CanvasTarget): void {
+    if (this.origins.length === 0) return;
+
+    target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+      context.save();
+      context.strokeStyle = '#64748b';
+      context.lineWidth = 1;
+      context.setLineDash([4, 4]);
+
+      for (const origin of this.origins) {
+        const crispX = Math.round(origin.x) + 0.5;
+        context.beginPath();
+        context.moveTo(crispX, 0);
+        context.lineTo(crispX, mediaSize.height);
+        context.stroke();
+      }
+
+      context.setLineDash([]);
+      context.font = '600 9px ui-monospace, SFMono-Regular, monospace';
+      context.fillStyle = '#64748b';
+      for (const origin of this.origins) {
+        context.fillText(origin.tag, origin.x + 3, 10);
+      }
+
+      context.restore();
+    });
+  }
+
+  draw(target: CanvasTarget): void {
+    target.useMediaCoordinateSpace(({ context, mediaSize }) => {
       context.save();
 
-      // 1. Draw "SAR Wilder AT.S" circles (tmpSAR[1], green if tendance[1]==1 else red)
+      // 1. Draw Active Unpierced Jack & Oggy Horizontal Rays starting from Origin Bar -> Right Edge
+      for (const ray of this.rays) {
+        context.save();
+        context.strokeStyle = ray.color;
+        context.lineWidth = ray.lineWidth;
+        context.setLineDash(ray.dash);
+        context.beginPath();
+        context.moveTo(ray.xStart, ray.y);
+        context.lineTo(mediaSize.width, ray.y);
+        context.stroke();
+        context.restore();
+
+        if (ray.hasVisibleOrigin) {
+          context.beginPath();
+          context.arc(ray.xStart, ray.y, 2.6, 0, Math.PI * 2);
+          context.fillStyle = ray.color;
+          context.fill();
+        }
+      }
+
+      // 2. Draw "SAR Wilder AT.S" circles (tmpSAR[1], green if tendance[1]==1 else red)
       for (const pt of this.points) {
         context.beginPath();
         context.arc(pt.x, pt.y, 2.9, 0, Math.PI * 2);
@@ -57,11 +138,10 @@ class ParabolicSARPaneRenderer implements ISeriesPrimitivePaneRenderer {
         context.fill();
       }
 
-      // 2. Draw Setup 1-2-3-4 Overlay (Signal Orange / Vert + 2 billes noires SMA7 & SMA20)
+      // 3. Draw Setup 1-2-3-4 Overlay (Signal Orange / Vert + 2 billes noires SMA7 & SMA20)
       if (this.setupOverlay) {
         const ov = this.setupOverlay;
 
-        // 2a. "2 billes noires" (Black target circles at SMA7 & SMA20 at bar_index + 2)
         const drawBlackBall = (y: number, tag: string) => {
           context.beginPath();
           context.arc(ov.targetX, y, 5.2, 0, Math.PI * 2);
@@ -83,14 +163,13 @@ class ParabolicSARPaneRenderer implements ISeriesPrimitivePaneRenderer {
           drawBlackBall(ov.bille2Y, 'M20');
         }
 
-        // 2b. Signal Marker (Orange = Candidat non confirmé, Vert/Rouge = Confirmé)
         if (ov.signalX !== null && ov.signalY !== null) {
           const badgeColor =
             ov.status === 'CONFIRMED'
               ? ov.isBull
                 ? '#16a34a'
                 : '#dc2626'
-              : '#f97316'; // Orange candidate per setup1234.pine
+              : '#f97316';
 
           const yOffset = ov.isBull ? 14 : -14;
           const cy = ov.signalY + yOffset;
@@ -113,6 +192,8 @@ class ParabolicSARPaneRenderer implements ISeriesPrimitivePaneRenderer {
 class ParabolicSARPaneView implements ISeriesPrimitivePaneView {
   private source: ParabolicSARDotsPrimitive;
   private screenPoints: ScreenSARPoint[] = [];
+  private screenOrigins: ScreenOriginMarker[] = [];
+  private screenRays: ScreenHorizontalRay[] = [];
   private screenOverlay: ScreenSetupOverlay | null = null;
 
   constructor(source: ParabolicSARDotsPrimitive) {
@@ -120,7 +201,7 @@ class ParabolicSARPaneView implements ISeriesPrimitivePaneView {
   }
 
   zOrder(): SeriesPrimitivePaneViewZOrder {
-    return 'top';
+    return 'normal';
   }
 
   update(): void {
@@ -131,6 +212,8 @@ class ParabolicSARPaneView implements ISeriesPrimitivePaneView {
 
     if (!chart || !series) {
       this.screenPoints = [];
+      this.screenOrigins = [];
+      this.screenRays = [];
       this.screenOverlay = null;
       return;
     }
@@ -138,7 +221,45 @@ class ParabolicSARPaneView implements ISeriesPrimitivePaneView {
     const timeScale = chart.timeScale();
     const chartWidth = timeScale.width();
 
-    // 1. Project Wilder SAR dots
+    // 1. Project Vertical Grey Dashed Origin Lines (Jack t-20 & Oggy t-7)
+    const nextOrigins: ScreenOriginMarker[] = [];
+    for (const orig of this.source.getOriginTimes()) {
+      const x = timeScale.timeToCoordinate(orig.time as Time);
+      if (x !== null && (chartWidth === 0 || (x >= -4 && x <= chartWidth + 4))) {
+        nextOrigins.push({ x, tag: orig.tag });
+      }
+    }
+    this.screenOrigins = nextOrigins;
+
+    // 2. Project Active Unpierced Jack & Oggy Horizontal Rays from Origin Bar -> Right Edge
+    const nextRays: ScreenHorizontalRay[] = [];
+    for (const line of this.source.getActiveBaselines()) {
+      const y = series.priceToCoordinate(line.price);
+      if (y === null) continue;
+
+      const xRaw = timeScale.timeToCoordinate(line.referenceTime as Time);
+      const xStart = xRaw !== null ? Math.max(0, xRaw) : 0;
+      const hasVisibleOrigin = xRaw !== null && xRaw >= 0;
+
+      const isZero = line.key === 'Jack_0' || line.key === 'Oggy_0';
+      const dash = isZero
+        ? []
+        : line.family === 'Jack'
+        ? [6, 4]
+        : [2, 3];
+
+      nextRays.push({
+        xStart,
+        hasVisibleOrigin,
+        y,
+        color: line.polarity === 'GREEN' ? '#16a34a' : '#dc2626',
+        lineWidth: isZero ? 2 : 1.2,
+        dash,
+      });
+    }
+    this.screenRays = nextRays;
+
+    // 3. Project Wilder SAR dots
     if (this.source.isVisible() && data.length > 0) {
       const nextPoints: ScreenSARPoint[] = [];
       for (let i = 0; i < data.length; i++) {
@@ -158,7 +279,7 @@ class ParabolicSARPaneView implements ISeriesPrimitivePaneView {
       this.screenPoints = [];
     }
 
-    // 2. Project Setup 1-2-3-4 markers & "2 billes noires" (SMA7 / SMA20)
+    // 4. Project Setup 1-2-3-4 markers & "2 billes noires" (SMA7 / SMA20)
     const lastBarTime = this.source.getLatestBarTime();
     if (
       this.source.isSetupVisible() &&
@@ -177,7 +298,8 @@ class ParabolicSARPaneView implements ISeriesPrimitivePaneView {
         }
       }
 
-      const targetX = (lastX ?? chartWidth - 36) + Math.max(12, barSpacing * 1.8);
+      const targetX =
+        (lastX ?? chartWidth - 36) + Math.max(12, barSpacing * 1.8);
 
       const sigX = setup.signalBarTime
         ? timeScale.timeToCoordinate(setup.signalBarTime as Time)
@@ -211,24 +333,31 @@ class ParabolicSARPaneView implements ISeriesPrimitivePaneView {
   }
 
   renderer(): ISeriesPrimitivePaneRenderer | null {
-    if (this.screenPoints.length === 0 && !this.screenOverlay) {
+    if (
+      this.screenPoints.length === 0 &&
+      this.screenOrigins.length === 0 &&
+      this.screenRays.length === 0 &&
+      !this.screenOverlay
+    ) {
       return null;
     }
-    return new ParabolicSARPaneRenderer(this.screenPoints, this.screenOverlay);
+    return new ParabolicSARPaneRenderer(
+      this.screenPoints,
+      this.screenOrigins,
+      this.screenRays,
+      this.screenOverlay
+    );
   }
 }
 
-/**
- * Custom Canvas Series Primitive rendering:
- * 1. "SAR Wilder AT.S" circles (tmpSAR[1], green / red)
- * 2. Setup 1-2-3-4 Signal (Orange Candidat / Vert-Rouge Confirmé) + "2 billes noires" (SMA7 & SMA20)
- */
 export class ParabolicSARDotsPrimitive implements ISeriesPrimitive<Time> {
   private chart: IChartApiBase<Time> | null = null;
   private series: ISeriesApi<SeriesType, Time> | null = null;
   private requestUpdate: (() => void) | null = null;
   private data: ParabolicSARPoint[] = [];
   private visible = true;
+  private originTimes: Array<{ time: string; tag: string }> = [];
+  private activeBaselines: ATSBaseline[] = [];
   private setup1234: TimeframeSetup1234 | null = null;
   private latestBarTime: string | null = null;
   private showSetupOverlay = true;
@@ -253,18 +382,22 @@ export class ParabolicSARDotsPrimitive implements ISeriesPrimitive<Time> {
     this.requestUpdate = null;
   }
 
-  setData(
-    data: ParabolicSARPoint[],
-    visible = true,
-    setup1234: TimeframeSetup1234 | null = null,
-    latestBarTime: string | null = null,
-    showSetupOverlay = true
-  ): void {
-    this.data = data;
-    this.visible = visible;
-    this.setup1234 = setup1234;
-    this.latestBarTime = latestBarTime;
-    this.showSetupOverlay = showSetupOverlay;
+  setData(params: {
+    sarPoints: ParabolicSARPoint[];
+    showSAR: boolean;
+    originTimes: Array<{ time: string; tag: string }>;
+    activeBaselines: ATSBaseline[];
+    setup1234: TimeframeSetup1234 | null;
+    latestBarTime: string | null;
+    showSetupOverlay: boolean;
+  }): void {
+    this.data = params.sarPoints;
+    this.visible = params.showSAR;
+    this.originTimes = params.originTimes;
+    this.activeBaselines = params.activeBaselines;
+    this.setup1234 = params.setup1234;
+    this.latestBarTime = params.latestBarTime;
+    this.showSetupOverlay = params.showSetupOverlay;
     this.updateAllViews();
     this.requestUpdate?.();
   }
@@ -281,24 +414,31 @@ export class ParabolicSARDotsPrimitive implements ISeriesPrimitive<Time> {
     startTimePoint: Logical,
     endTimePoint: Logical
   ): AutoscaleInfo | null {
-    if (!this.visible || this.data.length === 0) return null;
-
-    const from = Math.max(0, Math.floor(startTimePoint));
-    const to = Math.min(this.data.length - 1, Math.ceil(endTimePoint));
-    if (from > to) return null;
-
     let minVal = Infinity;
     let maxVal = -Infinity;
 
-    for (let i = from; i <= to; i++) {
-      const v = this.data[i]?.value;
-      if (v !== undefined && Number.isFinite(v)) {
-        if (v < minVal) minVal = v;
-        if (v > maxVal) maxVal = v;
+    if (this.visible && this.data.length > 0) {
+      const from = Math.max(0, Math.floor(startTimePoint));
+      const to = Math.min(this.data.length - 1, Math.ceil(endTimePoint));
+      for (let i = from; i <= to; i++) {
+        const v = this.data[i]?.value;
+        if (v !== undefined && Number.isFinite(v)) {
+          if (v < minVal) minVal = v;
+          if (v > maxVal) maxVal = v;
+        }
       }
     }
 
-    if (this.showSetupOverlay && this.setup1234 && this.setup1234.status !== 'NONE') {
+    for (const line of this.activeBaselines) {
+      minVal = Math.min(minVal, line.price);
+      maxVal = Math.max(maxVal, line.price);
+    }
+
+    if (
+      this.showSetupOverlay &&
+      this.setup1234 &&
+      this.setup1234.status !== 'NONE'
+    ) {
       if (this.setup1234.tp1Sma7 !== null) {
         minVal = Math.min(minVal, this.setup1234.tp1Sma7);
         maxVal = Math.max(maxVal, this.setup1234.tp1Sma7);
@@ -329,6 +469,14 @@ export class ParabolicSARDotsPrimitive implements ISeriesPrimitive<Time> {
 
   getData(): ParabolicSARPoint[] {
     return this.data;
+  }
+
+  getOriginTimes(): Array<{ time: string; tag: string }> {
+    return this.originTimes;
+  }
+
+  getActiveBaselines(): ATSBaseline[] {
+    return this.activeBaselines;
   }
 
   getSetup1234(): TimeframeSetup1234 | null {
