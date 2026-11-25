@@ -95,7 +95,6 @@ export const GlobalAssetLookup: React.FC<GlobalAssetLookupProps> = ({
   const [searching, setSearching] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
 
-  // Inline Quick ATS Check state
   const [inspectingKey, setInspectingKey] = useState<string | null>(null);
   const [inspectedPayload, setInspectedPayload] =
     useState<MTFAssetPayload | null>(null);
@@ -104,7 +103,6 @@ export const GlobalAssetLookup: React.FC<GlobalAssetLookupProps> = ({
 
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // Global Cmd+K / Ctrl+K + custom DOM event listener so any view can open the modal
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
@@ -135,7 +133,6 @@ export const GlobalAssetLookup: React.FC<GlobalAssetLookupProps> = ({
     }
   }, [isOpen]);
 
-  // Debounced live search against /api/search
   useEffect(() => {
     const trimmed = query.trim();
     if (!trimmed) {
@@ -157,7 +154,7 @@ export const GlobalAssetLookup: React.FC<GlobalAssetLookupProps> = ({
           setActiveIndex(0);
         }
       } catch {
-        // Keep current results on transient network error
+        // Keep current results
       } finally {
         setSearching(false);
       }
@@ -288,426 +285,427 @@ export const GlobalAssetLookup: React.FC<GlobalAssetLookupProps> = ({
         type="button"
         onClick={() => setIsOpen(true)}
         className={cn(
-          'flex items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-900/90 text-left text-xs text-slate-400 transition-all hover:border-emerald-500/50 hover:bg-slate-900 hover:text-slate-200',
+          'flex items-center justify-between gap-2 rounded-lg border border-slate-300 bg-white text-left text-xs text-slate-500 shadow-sm transition-all hover:border-emerald-500 hover:text-slate-800',
           compact ? 'h-8 px-3' : 'w-full px-3 py-2'
         )}
       >
         <span className="flex items-center gap-2 truncate">
-          <Search className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+          <Search className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
           <span className="truncate">
-            {compact
-              ? 'Lookup Asset...'
-              : 'Lookup Stock, Crypto, FX...'}
+            {compact ? 'Lookup Asset...' : 'Lookup Stock, Crypto, FX...'}
           </span>
         </span>
-        <kbd className="rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 font-mono text-[10px] text-slate-400 shrink-0">
+        <kbd className="rounded border border-slate-200 bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-600 shrink-0">
           ⌘K
         </kbd>
       </button>
 
-      {/* Spotlight Modal Overlay — Portaled to document.body to escape sticky/blur stacking contexts */}
+      {/* Spotlight Modal Overlay — Portaled to document.body */}
       {isOpen &&
         typeof document !== 'undefined' &&
         createPortal(
           <div
             style={{ zIndex: 9999 }}
-            className="fixed inset-0 z-50 flex items-start justify-center bg-black/80 p-4 pt-12 sm:pt-20 backdrop-blur-md"
+            className="fixed inset-0 z-50 flex items-start justify-center bg-slate-900/50 p-4 pt-12 sm:pt-20 backdrop-blur-sm"
             onClick={() => setIsOpen(false)}
           >
             <div
-              className="relative w-full max-w-3xl overflow-hidden rounded-2xl border border-slate-700 bg-[#080d19] text-slate-100 shadow-2xl"
+              className="relative w-full max-w-3xl overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl"
               onClick={(e) => e.stopPropagation()}
             >
-            {/* Search Input Bar */}
-            <div className="flex items-center gap-3 border-b border-slate-800 px-4 py-3">
-              {searching ? (
-                <Loader2 className="h-4 w-4 animate-spin text-emerald-400 shrink-0" />
-              ) : (
-                <Search className="h-4 w-4 text-emerald-400 shrink-0" />
-              )}
-              <input
-                ref={inputRef}
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={handleInputKeyDown}
-                placeholder="Search any Stock (AAPL, TSM, RKLB), Crypto (BTC, SOL, HYPE), or Currency Pair (EUR/USD, USDZAR)..."
-                className="w-full bg-transparent text-sm text-white placeholder:text-slate-500 focus:outline-none"
-              />
-              {query && (
+              {/* Search Input Bar */}
+              <div className="flex items-center gap-3 border-b border-slate-200 px-4 py-3">
+                {searching ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-emerald-600 shrink-0" />
+                ) : (
+                  <Search className="h-4 w-4 text-emerald-600 shrink-0" />
+                )}
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={handleInputKeyDown}
+                  placeholder="Search any Stock (AAPL, TSM, RKLB), Crypto (BTC, SOL, HYPE), or Currency Pair (EUR/USD, USDZAR)..."
+                  className="w-full bg-transparent text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
+                />
+                {query && (
+                  <button
+                    type="button"
+                    onClick={() => setQuery('')}
+                    className="text-slate-400 hover:text-slate-700"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={() => setQuery('')}
-                  className="text-slate-500 hover:text-slate-300"
+                  onClick={() => setIsOpen(false)}
+                  className="rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600 hover:bg-slate-100 hover:text-slate-900"
                 >
-                  <X className="h-4 w-4" />
+                  ESC
                 </button>
-              )}
-              <button
-                type="button"
-                onClick={() => setIsOpen(false)}
-                className="rounded border border-slate-800 px-2 py-0.5 text-xs text-slate-400 hover:bg-slate-800 hover:text-white"
-              >
-                ESC
-              </button>
-            </div>
-
-            {/* Category Filter Pills */}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 bg-slate-900/50 px-4 py-2">
-              <div className="flex items-center gap-1.5">
-                {(
-                  [
-                    { id: 'all', label: 'All Assets' },
-                    { id: 'stocks', label: 'Stocks & ETFs' },
-                    { id: 'crypto', label: 'Crypto' },
-                    { id: 'forex', label: 'Currency Pairs' },
-                  ] as Array<{ id: CategoryTab; label: string }>
-                ).map((tab) => (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => setCategoryTab(tab.id)}
-                    className={cn(
-                      'rounded-md px-2.5 py-1 text-xs font-semibold transition-colors',
-                      categoryTab === tab.id
-                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                        : 'text-slate-400 hover:text-slate-200 border border-transparent'
-                    )}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
               </div>
-              <span className="text-[11px] text-slate-500 hidden sm:inline">
-                Click &ldquo;Quick Check&rdquo; for instant ATS score or row for 6-Pane Charts
-              </span>
-            </div>
 
-            {/* Live Inline Quick ATS Inspection Card (when triggered) */}
-            {(inspectingKey || inspectedPayload || inspectError) && (
-              <div className="border-b border-slate-800 bg-slate-900/70 p-4">
-                {inspectingKey && (
-                  <div className="flex items-center gap-2 text-xs font-mono text-emerald-300">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Computing 6-Timeframe ATS Polarity Matrix (D, W, M, 3M, 6M, 12M)...
-                  </div>
-                )}
+              {/* Category Filter Pills */}
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2">
+                <div className="flex items-center gap-1.5">
+                  {(
+                    [
+                      { id: 'all', label: 'All Assets' },
+                      { id: 'stocks', label: 'Stocks & ETFs' },
+                      { id: 'crypto', label: 'Crypto' },
+                      { id: 'forex', label: 'Currency Pairs' },
+                    ] as Array<{ id: CategoryTab; label: string }>
+                  ).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setCategoryTab(tab.id)}
+                      className={cn(
+                        'rounded-md px-2.5 py-1 text-xs font-semibold transition-colors border',
+                        categoryTab === tab.id
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                          : 'bg-white text-slate-600 hover:text-slate-900 border-slate-200'
+                      )}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+                <span className="text-[11px] text-slate-500 hidden sm:inline">
+                  Click &ldquo;Quick Check&rdquo; for instant ATS score or row for 6-Pane Charts
+                </span>
+              </div>
 
-                {inspectError && (
-                  <div className="text-xs text-rose-400">
-                    Could not analyze ticker: {inspectError}
-                  </div>
-                )}
+              {/* Live Inline Quick ATS Inspection Card */}
+              {(inspectingKey || inspectedPayload || inspectError) && (
+                <div className="border-b border-slate-200 bg-amber-50/40 p-4">
+                  {inspectingKey && (
+                    <div className="flex items-center gap-2 text-xs font-mono text-emerald-700 font-medium">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Computing 6-Timeframe ATS Polarity Matrix (D, W, M, 3M, 6M, 12M)...
+                    </div>
+                  )}
 
-                {inspectedPayload && (
-                  <div className="space-y-3">
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-mono text-base font-bold text-white">
-                            {inspectedPayload.displaySymbol}
-                          </span>
-                          <span className="text-xs text-slate-400">
-                            {inspectedPayload.name}
-                          </span>
-                          <span className="font-mono text-sm font-bold text-white">
-                            {formatPrice(
-                              inspectedPayload.livePrice,
-                              inspectedPayload.category
-                            )}
-                          </span>
-                          <Badge
-                            variant={
-                              inspectedPayload.screener.direction === 'SHORT'
-                                ? 'resistance'
-                                : inspectedPayload.screener.direction === 'LONG'
-                                ? 'support'
-                                : 'outline'
-                            }
-                            className="font-mono text-[10px]"
-                          >
-                            {inspectedPayload.screener.direction} •{' '}
-                            {inspectedPayload.screener.confidenceScore}% (Step{' '}
-                            {inspectedPayload.screener.setupStep}/4)
-                          </Badge>
+                  {inspectError && (
+                    <div className="text-xs text-rose-600 font-medium">
+                      Could not analyze ticker: {inspectError}
+                    </div>
+                  )}
+
+                  {inspectedPayload && (
+                    <div className="space-y-3">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-mono text-base font-bold text-slate-900">
+                              {inspectedPayload.displaySymbol}
+                            </span>
+                            <span className="text-xs text-slate-500">
+                              {inspectedPayload.name}
+                            </span>
+                            <span className="font-mono text-sm font-bold text-slate-900">
+                              {formatPrice(
+                                inspectedPayload.livePrice,
+                                inspectedPayload.category
+                              )}
+                            </span>
+                            <Badge
+                              variant={
+                                inspectedPayload.screener.direction === 'SHORT'
+                                  ? 'resistance'
+                                  : inspectedPayload.screener.direction === 'LONG'
+                                  ? 'support'
+                                  : 'outline'
+                              }
+                              className="font-mono text-[10px]"
+                            >
+                              {inspectedPayload.screener.direction} •{' '}
+                              {inspectedPayload.screener.confidenceScore}% (Step{' '}
+                              {inspectedPayload.screener.setupStep}/4)
+                            </Badge>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-700">
+                            {inspectedPayload.screener.thesisHeadline}
+                          </p>
                         </div>
-                        <p className="mt-1 text-xs text-slate-300">
-                          {inspectedPayload.screener.thesisHeadline}
-                        </p>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              void handleSaveToWatchlist(
+                                inspectedPayload.symbol,
+                                inspectedPayload.category,
+                                inspectedPayload
+                              )
+                            }
+                          >
+                            {savedToastSymbol === inspectedPayload.symbol ? (
+                              <>
+                                <Check className="h-3.5 w-3.5 text-emerald-600" />
+                                Saved
+                              </>
+                            ) : (
+                              <>
+                                <BookmarkPlus className="h-3.5 w-3.5" />
+                                + Watchlist
+                              </>
+                            )}
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              handleOpenInCharts(
+                                inspectedPayload.symbol,
+                                inspectedPayload.category
+                              )
+                            }
+                          >
+                            6-Pane Charts
+                            <ArrowUpRight className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
+                      {/* 6-Timeframe Polarity Strip */}
+                      <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
+                        {ALL_TIMEFRAMES.map((tf) => {
+                          const h = inspectedPayload.screener.horizonMatrix[tf];
+                          const hasTouch = h.wallTouches.length > 0;
+                          return (
+                            <div
+                              key={tf}
+                              className={cn(
+                                'rounded border px-2 py-1 text-center font-mono text-[10px]',
+                                hasTouch
+                                  ? 'border-emerald-400 bg-emerald-50 text-slate-900'
+                                  : 'border-slate-200 bg-white text-slate-700'
+                              )}
+                            >
+                              <div className="font-bold">
+                                {tf} {hasTouch ? '★' : ''}
+                              </div>
+                              <div>
+                                <span className="text-emerald-700 font-semibold">
+                                  {h.greenCount}G
+                                </span>{' '}
+                                /{' '}
+                                <span className="text-rose-700 font-semibold">
+                                  {h.redCount}R
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-4 text-xs font-mono border-t border-slate-200 pt-2 text-slate-700">
+                        <span>
+                          Wall:{' '}
+                          <strong className="text-slate-900">
+                            {inspectedPayload.screener.activeWallLabel}
+                          </strong>
+                        </span>
+                        <span>
+                          SL:{' '}
+                          <strong className="text-rose-700">
+                            {formatPrice(
+                              inspectedPayload.screener.stopLoss,
+                              inspectedPayload.category
+                            )}
+                          </strong>
+                        </span>
+                        {inspectedPayload.screener.effectiveTargetTP1 && (
+                          <span>
+                            TP1 (Didi):{' '}
+                            <strong className="text-emerald-700">
+                              {formatPrice(
+                                inspectedPayload.screener.effectiveTargetTP1.price,
+                                inspectedPayload.category
+                              )}{' '}
+                              ({inspectedPayload.screener.effectiveTargetTP1.label})
+                            </strong>
+                          </span>
+                        )}
+                        {inspectedPayload.screener.riskRewardRatio !== null && (
+                          <span className="text-amber-700 font-bold">
+                            R:R {inspectedPayload.screener.riskRewardRatio.toFixed(2)}x
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Results List */}
+              <div className="max-h-[380px] overflow-y-auto divide-y divide-slate-100">
+                {!query.trim() && (
+                  <div className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-50">
+                    Popular Multi-Asset Lookups
+                  </div>
+                )}
+
+                {filteredResults.map((item, idx) => {
+                  const isSelected = idx === activeIndex;
+                  const itemKey = `${item.category}:${item.symbol}`;
+                  const inWatchlist = watchlists[item.category].includes(
+                    item.symbol
+                  );
+
+                  return (
+                    <div
+                      key={itemKey}
+                      onMouseEnter={() => setActiveIndex(idx)}
+                      onClick={() =>
+                        handleOpenInCharts(item.symbol, item.category)
+                      }
+                      className={cn(
+                        'flex cursor-pointer items-center justify-between gap-3 px-4 py-2.5 transition-colors',
+                        isSelected ? 'bg-slate-100/90' : 'hover:bg-slate-50'
+                      )}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <Badge
+                          variant={categoryBadgeVariant(item.category)}
+                          className="font-mono text-[10px] w-20 justify-center shrink-0"
+                        >
+                          {item.typeLabel}
+                        </Badge>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-sm font-bold text-slate-900">
+                              {item.displaySymbol}
+                            </span>
+                            {item.exchange && (
+                              <span className="text-[10px] font-mono text-slate-500">
+                                {item.exchange}
+                              </span>
+                            )}
+                          </div>
+                          <p className="truncate text-xs text-slate-500">
+                            {item.name}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() =>
-                            void handleSaveToWatchlist(
-                              inspectedPayload.symbol,
-                              inspectedPayload.category,
-                              inspectedPayload
-                            )
-                          }
+                          className="h-7 px-2 text-xs"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleQuickInspect(item.symbol, item.category);
+                          }}
                         >
-                          {savedToastSymbol === inspectedPayload.symbol ? (
+                          <Radar className="h-3 w-3 text-emerald-600" />
+                          Quick Check
+                        </Button>
+
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleSaveToWatchlist(
+                              item.symbol,
+                              item.category
+                            );
+                          }}
+                        >
+                          {inWatchlist || savedToastSymbol === item.symbol ? (
                             <>
-                              <Check className="h-3.5 w-3.5 text-emerald-400" />
+                              <Check className="h-3 w-3 text-emerald-600" />
                               Saved
                             </>
                           ) : (
                             <>
-                              <BookmarkPlus className="h-3.5 w-3.5" />
-                              + Watchlist
+                              <BookmarkPlus className="h-3 w-3" />
+                              Save
                             </>
                           )}
                         </Button>
+
                         <Button
+                          variant="ghost"
                           size="sm"
-                          onClick={() =>
-                            handleOpenInCharts(
-                              inspectedPayload.symbol,
-                              inspectedPayload.category
-                            )
-                          }
+                          className="h-7 px-2 text-xs text-emerald-700 hover:text-emerald-800"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenInCharts(item.symbol, item.category);
+                          }}
                         >
-                          6-Pane Charts
+                          Charts
                           <ArrowUpRight className="h-3.5 w-3.5" />
                         </Button>
                       </div>
                     </div>
+                  );
+                })}
 
-                    {/* 6-Timeframe Polarity Strip */}
-                    <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
-                      {ALL_TIMEFRAMES.map((tf) => {
-                        const h = inspectedPayload.screener.horizonMatrix[tf];
-                        const hasTouch = h.wallTouches.length > 0;
-                        return (
-                          <div
-                            key={tf}
-                            className={cn(
-                              'rounded border px-2 py-1 text-center font-mono text-[10px]',
-                              hasTouch
-                                ? 'border-emerald-400 bg-emerald-500/15 text-white'
-                                : 'border-slate-800 bg-slate-950 text-slate-300'
-                            )}
-                          >
-                            <div className="font-bold">
-                              {tf} {hasTouch ? '★' : ''}
-                            </div>
-                            <div>
-                              <span className="text-emerald-400">
-                                {h.greenCount}G
-                              </span>{' '}
-                              /{' '}
-                              <span className="text-rose-400">{h.redCount}R</span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Key Levels + Reasoning */}
-                    <div className="flex flex-wrap items-center gap-4 text-xs font-mono border-t border-slate-800 pt-2">
-                      <span>
-                        Wall:{' '}
-                        <strong className="text-white">
-                          {inspectedPayload.screener.activeWallLabel}
-                        </strong>
-                      </span>
-                      <span>
-                        SL:{' '}
-                        <strong className="text-rose-400">
-                          {formatPrice(
-                            inspectedPayload.screener.stopLoss,
-                            inspectedPayload.category
-                          )}
-                        </strong>
-                      </span>
-                      {inspectedPayload.screener.effectiveTargetTP1 && (
-                        <span>
-                          TP1 (Didi):{' '}
-                          <strong className="text-emerald-300">
-                            {formatPrice(
-                              inspectedPayload.screener.effectiveTargetTP1.price,
-                              inspectedPayload.category
-                            )}{' '}
-                            ({inspectedPayload.screener.effectiveTargetTP1.label})
-                          </strong>
-                        </span>
-                      )}
-                      {inspectedPayload.screener.riskRewardRatio !== null && (
-                        <span className="text-amber-300 font-semibold">
-                          R:R {inspectedPayload.screener.riskRewardRatio.toFixed(2)}x
-                        </span>
-                      )}
+                {query.trim().length > 0 && (
+                  <div className="bg-slate-50 px-4 py-3">
+                    <p className="mb-2 text-[11px] text-slate-600 flex items-center gap-1.5">
+                      <Sparkles className="h-3 w-3 text-amber-600" />
+                      Direct Lookup for{' '}
+                      <strong className="font-mono text-slate-900">
+                        {query.trim().toUpperCase()}
+                      </strong>
+                      :
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs font-mono"
+                        onClick={() =>
+                          void handleQuickInspect(
+                            query.trim().toUpperCase(),
+                            'stocks'
+                          )
+                        }
+                      >
+                        Quick Check as Stock/ETF
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs font-mono"
+                        onClick={() =>
+                          void handleQuickInspect(
+                            query.trim().toUpperCase(),
+                            'crypto'
+                          )
+                        }
+                      >
+                        Quick Check as Crypto
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs font-mono"
+                        onClick={() =>
+                          void handleQuickInspect(
+                            query.trim().toUpperCase(),
+                            'forex'
+                          )
+                        }
+                      >
+                        Quick Check as Forex Pair
+                      </Button>
                     </div>
                   </div>
                 )}
               </div>
-            )}
-
-            {/* Results List */}
-            <div className="max-h-[380px] overflow-y-auto divide-y divide-slate-800/60">
-              {!query.trim() && (
-                <div className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-950/50">
-                  Popular Multi-Asset Lookups
-                </div>
-              )}
-
-              {filteredResults.map((item, idx) => {
-                const isSelected = idx === activeIndex;
-                const itemKey = `${item.category}:${item.symbol}`;
-                const inWatchlist = watchlists[item.category].includes(
-                  item.symbol
-                );
-
-                return (
-                  <div
-                    key={itemKey}
-                    onMouseEnter={() => setActiveIndex(idx)}
-                    onClick={() =>
-                      handleOpenInCharts(item.symbol, item.category)
-                    }
-                    className={cn(
-                      'flex cursor-pointer items-center justify-between gap-3 px-4 py-2.5 transition-colors',
-                      isSelected ? 'bg-slate-900/90' : 'hover:bg-slate-900/50'
-                    )}
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <Badge
-                        variant={categoryBadgeVariant(item.category)}
-                        className="font-mono text-[10px] w-20 justify-center shrink-0"
-                      >
-                        {item.typeLabel}
-                      </Badge>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-sm font-bold text-white">
-                            {item.displaySymbol}
-                          </span>
-                          {item.exchange && (
-                            <span className="text-[10px] font-mono text-slate-500">
-                              {item.exchange}
-                            </span>
-                          )}
-                        </div>
-                        <p className="truncate text-xs text-slate-400">
-                          {item.name}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-7 px-2 text-xs"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleQuickInspect(item.symbol, item.category);
-                        }}
-                      >
-                        <Radar className="h-3 w-3 text-emerald-400" />
-                        Quick Check
-                      </Button>
-
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 px-2 text-xs text-slate-300 hover:text-white"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleSaveToWatchlist(item.symbol, item.category);
-                        }}
-                      >
-                        {inWatchlist || savedToastSymbol === item.symbol ? (
-                          <>
-                            <Check className="h-3 w-3 text-emerald-400" />
-                            Saved
-                          </>
-                        ) : (
-                          <>
-                            <BookmarkPlus className="h-3 w-3" />
-                            Save
-                          </>
-                        )}
-                      </Button>
-
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 px-2 text-xs text-emerald-400 hover:text-emerald-300"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleOpenInCharts(item.symbol, item.category);
-                        }}
-                      >
-                        Charts
-                        <ArrowUpRight className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* Direct Raw Ticker Fallback Actions (works for ANY unlisted ticker) */}
-              {query.trim().length > 0 && (
-                <div className="bg-slate-950/90 px-4 py-3">
-                  <p className="mb-2 text-[11px] text-slate-400 flex items-center gap-1.5">
-                    <Sparkles className="h-3 w-3 text-amber-400" />
-                    Direct Lookup for{' '}
-                    <strong className="font-mono text-white">
-                      {query.trim().toUpperCase()}
-                    </strong>
-                    :
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs font-mono"
-                      onClick={() =>
-                        void handleQuickInspect(
-                          query.trim().toUpperCase(),
-                          'stocks'
-                        )
-                      }
-                    >
-                      Quick Check as Stock/ETF
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs font-mono"
-                      onClick={() =>
-                        void handleQuickInspect(
-                          query.trim().toUpperCase(),
-                          'crypto'
-                        )
-                      }
-                    >
-                      Quick Check as Crypto
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs font-mono"
-                      onClick={() =>
-                        void handleQuickInspect(
-                          query.trim().toUpperCase(),
-                          'forex'
-                        )
-                      }
-                    >
-                      Quick Check as Forex Pair
-                    </Button>
-                  </div>
-                </div>
-              )}
             </div>
-          </div>
-        </div>,
-        document.body
-      )}
+          </div>,
+          document.body
+        )}
     </>
   );
 };

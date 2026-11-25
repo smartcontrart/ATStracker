@@ -59,7 +59,6 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
 }) => {
   const {
     activeCategory,
-    setActiveCategory,
     universePreset,
     setUniversePreset,
     getActiveSymbolsForCategory,
@@ -191,25 +190,39 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
   const handleAddSingleTicker = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!tickerInput.trim()) return;
-    const added = addTicker(tickerInput, activeCategory);
+
+    const rawTokens = tickerInput
+      .split(/[\s,;]+/)
+      .map((t) => t.trim())
+      .filter(Boolean);
     setTickerInput('');
-    if (!added) return;
+
+    const addedList: string[] = [];
+    for (const token of rawTokens) {
+      const added = addTicker(token, activeCategory);
+      if (added) addedList.push(added);
+    }
+    if (addedList.length === 0) return;
 
     try {
-      const qs = new URLSearchParams({
-        category: activeCategory,
-        symbols: added,
-      });
-      const res = await fetch(`/api/screener?${qs.toString()}`);
-      if (res.ok) {
-        const json = await res.json();
-        const curProgress = useATSStore.getState().scanProgress[activeCategory];
-        appendScreenerBatch(
-          activeCategory,
-          (json.results || []) as ScreenerResult[],
-          curProgress.completed + 1,
-          curProgress.total + 1
-        );
+      for (let i = 0; i < addedList.length; i += 25) {
+        const chunk = addedList.slice(i, i + 25);
+        const qs = new URLSearchParams({
+          category: activeCategory,
+          symbols: chunk.join(','),
+        });
+        const res = await fetch(`/api/screener?${qs.toString()}`);
+        if (res.ok) {
+          const json = await res.json();
+          const curProgress =
+            useATSStore.getState().scanProgress[activeCategory];
+          appendScreenerBatch(
+            activeCategory,
+            (json.results || []) as ScreenerResult[],
+            curProgress.completed + chunk.length,
+            curProgress.total + chunk.length
+          );
+        }
       }
     } catch {
       // Non-fatal
@@ -281,25 +294,37 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
       : 0;
 
   const presetsForCategory = UNIVERSE_PRESETS[activeCategory];
+  const corePresets = presetsForCategory.filter((p) => p.group !== 'thematic');
+  const thematicPresets = presetsForCategory.filter(
+    (p) => p.group === 'thematic'
+  );
 
   return (
     <div className="space-y-5">
-      {/* Header & Scan Controls */}
+      {/* Header & Market Toggle + Scan Controls */}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-xl font-bold tracking-tight text-white sm:text-2xl">
+            <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
               Top Candidates — Bidirectional ATS Screener
             </h1>
             <Badge variant="support" className="font-mono">
               SUPPORT &amp; RESISTANCE WALLS
             </Badge>
           </div>
-          <p className="mt-1 text-xs text-slate-400 sm:text-sm">
-            Scans S&amp;P 500 equities, Top 100 Cryptos, and Top 50 USD/FX pairs for 1% Higher-Timeframe{' '}
-            <span className="text-emerald-400 font-medium">Green Support (LONG)</span> &amp;{' '}
-            <span className="text-rose-400 font-medium">Red Resistance (SHORT)</span> confluence. Click any row for 6-pane charts or{' '}
-            <span className="text-slate-200 font-medium">&ldquo;Why?&rdquo;</span> for full indicator reasoning.
+          <p className="mt-1 text-xs text-slate-600 sm:text-sm">
+            Scans S&amp;P 500 equities, Top 100 Cryptos, and Top 50 USD/FX pairs
+            for 1% Higher-Timeframe{' '}
+            <span className="text-emerald-700 font-semibold">
+              Green Support (LONG)
+            </span>{' '}
+            &amp;{' '}
+            <span className="text-rose-700 font-semibold">
+              Red Resistance (SHORT)
+            </span>{' '}
+            confluence. Click any row for 6-pane OHLC bar charts or{' '}
+            <span className="text-slate-900 font-semibold">&ldquo;Why?&rdquo;</span>{' '}
+            for full indicator reasoning.
           </p>
         </div>
 
@@ -317,7 +342,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
             size="sm"
             onClick={() => triggerGlobalAssetLookup()}
           >
-            <Search className="h-3.5 w-3.5 text-emerald-400" />
+            <Search className="h-3.5 w-3.5 text-emerald-600" />
             Lookup Asset (⌘K)
           </Button>
 
@@ -336,7 +361,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
               }}
             >
               <RefreshCw className="h-3.5 w-3.5" />
-              Rescan Universe ({getActiveSymbolsForCategory(activeCategory).length})
+              Rescan ({getActiveSymbolsForCategory(activeCategory).length})
             </Button>
           )}
         </div>
@@ -344,22 +369,27 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
 
       {/* Live Streaming Batch Progress Bar */}
       {isScanning && progress.total > 0 && (
-        <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-3 space-y-2">
+        <div className="rounded-xl border border-emerald-300 bg-emerald-50/70 p-3 space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
-            <span className="text-emerald-300 font-semibold flex items-center gap-2">
+            <span className="text-emerald-800 font-semibold flex items-center gap-2">
               <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-              Streaming MTF Polarity Batches: {progress.completed} / {progress.total}{' '}
-              assets ({progressPct}%)
+              Streaming MTF Polarity Batches: {progress.completed} /{' '}
+              {progress.total} assets ({progressPct}%)
             </span>
-            <span className="text-slate-400">
+            <span className="text-slate-600">
               Live hits so far:{' '}
-              <strong className="text-emerald-400">{supportWallsCount} Support</strong> ·{' '}
-              <strong className="text-rose-400">{resistanceWallsCount} Resistance</strong>
+              <strong className="text-emerald-700">
+                {supportWallsCount} Support
+              </strong>{' '}
+              ·{' '}
+              <strong className="text-rose-700">
+                {resistanceWallsCount} Resistance
+              </strong>
             </span>
           </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-emerald-200">
             <div
-              className="h-full bg-emerald-400 transition-all duration-300"
+              className="h-full bg-emerald-600 transition-all duration-300"
               style={{ width: `${progressPct}%` }}
             />
           </div>
@@ -368,70 +398,70 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
 
       {/* KPI Summary Strip */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Card className="border-slate-800/80 bg-slate-900/50">
+        <Card>
           <CardContent className="p-4 flex items-center justify-between">
             <div>
-              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                 LONG • Green Support Walls
               </p>
-              <p className="mt-1 text-2xl font-bold font-mono text-emerald-400">
+              <p className="mt-1 text-2xl font-bold font-mono text-emerald-700">
                 {supportWallsCount}{' '}
                 <span className="text-xs font-normal text-slate-500">
                   (&le;1% above floor)
                 </span>
               </p>
             </div>
-            <div className="rounded-lg bg-emerald-500/10 p-2.5 text-emerald-400">
+            <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-2.5 text-emerald-700">
               <ArrowUpRight className="h-5 w-5" />
             </div>
           </CardContent>
         </Card>
 
-        <Card className="border-slate-800/80 bg-slate-900/50">
+        <Card>
           <CardContent className="p-4 flex items-center justify-between">
             <div>
-              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                 SHORT • Red Resistance Walls
               </p>
-              <p className="mt-1 text-2xl font-bold font-mono text-rose-400">
+              <p className="mt-1 text-2xl font-bold font-mono text-rose-700">
                 {resistanceWallsCount}{' '}
                 <span className="text-xs font-normal text-slate-500">
                   (&le;1% below ceiling)
                 </span>
               </p>
             </div>
-            <div className="rounded-lg bg-rose-500/10 p-2.5 text-rose-400">
+            <div className="rounded-lg bg-rose-50 border border-rose-200 p-2.5 text-rose-700">
               <ArrowDownRight className="h-5 w-5" />
             </div>
           </CardContent>
         </Card>
 
-        <Card className="border-slate-800/80 bg-slate-900/50">
+        <Card>
           <CardContent className="p-4 flex items-center justify-between">
             <div>
-              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                 Step 3–4 Vol. Confirmed
               </p>
-              <p className="mt-1 text-2xl font-bold font-mono text-sky-300">
+              <p className="mt-1 text-2xl font-bold font-mono text-sky-700">
                 {step3PlusCount}{' '}
                 <span className="text-xs font-normal text-slate-500">
                   / {rows.length} scanned
                 </span>
               </p>
             </div>
-            <div className="rounded-lg bg-sky-500/10 p-2.5 text-sky-400">
+            <div className="rounded-lg bg-sky-50 border border-sky-200 p-2.5 text-sky-700">
               <Activity className="h-5 w-5" />
             </div>
           </CardContent>
         </Card>
 
-        <Card className="border-slate-800/80 bg-slate-900/50">
+        <Card>
           <CardContent className="p-4 flex items-center justify-between">
             <div>
-              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                 Universe Coverage
               </p>
-              <p className="mt-1 text-lg font-bold font-mono text-white">
+              <p className="mt-1 text-lg font-bold font-mono text-slate-900">
                 {rows.length} Assets Live
               </p>
               <p className="text-[11px] text-slate-500">
@@ -440,7 +470,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                   : 'Initializing...'}
               </p>
             </div>
-            <div className="rounded-lg bg-amber-500/10 p-2.5 text-amber-400">
+            <div className="rounded-lg bg-amber-50 border border-amber-200 p-2.5 text-amber-700">
               <Target className="h-5 w-5" />
             </div>
           </CardContent>
@@ -448,15 +478,14 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
       </div>
 
       {/* Universe Preset Selector + Custom Ticker Input */}
-      <div className="flex flex-col gap-3 rounded-xl border border-slate-800/80 bg-slate-900/40 p-3">
+      <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-1">
-              Scan List:
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 mr-1">
+              Univers:
             </span>
-            {/* Universe Size Preset Pills */}
             <div className="flex flex-wrap items-center gap-1.5">
-              {presetsForCategory.map((preset) => {
+              {corePresets.map((preset) => {
                 const active = currentPresetId === preset.id;
                 return (
                   <button
@@ -468,10 +497,10 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                       setUniversePreset(activeCategory, preset.id);
                     }}
                     className={cn(
-                      'rounded-md border px-2.5 py-1 text-xs font-medium transition-colors',
+                      'rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors',
                       active
-                        ? 'border-sky-500/50 bg-sky-500/15 text-sky-300'
-                        : 'border-slate-800 bg-slate-950/70 text-slate-400 hover:text-slate-200'
+                        ? 'border-emerald-500 bg-emerald-50 text-emerald-800 shadow-sm'
+                        : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                     )}
                   >
                     {preset.label}
@@ -481,7 +510,6 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
             </div>
           </div>
 
-          {/* Add Custom Ticker */}
           <form
             onSubmit={(e) => void handleAddSingleTicker(e)}
             className="flex w-full max-w-sm items-center gap-2"
@@ -504,8 +532,39 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
           </form>
         </div>
 
+        {/* 14 Thematic Stock Lists (.itf Sectors) */}
+        {thematicPresets.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-2.5">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mr-1">
+              14 Thématiques AT.S:
+            </span>
+            {thematicPresets.map((preset) => {
+              const active = currentPresetId === preset.id;
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  title={preset.description}
+                  onClick={() => {
+                    if (isScanning) stopActiveScan();
+                    setUniversePreset(activeCategory, preset.id);
+                  }}
+                  className={cn(
+                    'rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors',
+                    active
+                      ? 'border-sky-500 bg-sky-50 text-sky-900 font-semibold shadow-sm'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                  )}
+                >
+                  {preset.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* Direction Filter + <=1% Wall Toggle + Instant Filter Search */}
-        <div className="flex flex-col gap-2 border-t border-slate-800/70 pt-2.5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-2 border-t border-slate-200 pt-2.5 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap items-center gap-1.5">
             {(
               [
@@ -524,9 +583,9 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                     'rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors',
                     isSelected
                       ? opt.id === 'SHORT'
-                        ? 'border-rose-500/50 bg-rose-500/15 text-rose-300'
-                        : 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
-                      : 'border-slate-800 bg-slate-950/60 text-slate-400 hover:text-slate-200'
+                        ? 'border-rose-400 bg-rose-50 text-rose-800'
+                        : 'border-emerald-400 bg-emerald-50 text-emerald-800'
+                      : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                   )}
                 >
                   {opt.label}
@@ -548,7 +607,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
           </div>
 
           <div className="relative w-full sm:w-64">
-            <Search className="pointer-events-none absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-500" />
+            <Search className="pointer-events-none absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-400" />
             <Input
               value={tableSearch}
               onChange={(e) => setTableSearch(e.target.value)}
@@ -560,18 +619,24 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
       </div>
 
       {scanError && (
-        <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-          <ShieldAlert className="h-4 w-4 shrink-0" />
+        <div className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <ShieldAlert className="h-4 w-4 shrink-0 text-amber-700" />
           <span>{scanError}</span>
         </div>
       )}
 
-      {/* Top Hit List Spotlight Strip (Highest Confidence Scores) */}
+      {/* Top Hit List Spotlight Strip */}
       {topHitLeaders.length > 0 && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Top {activeCategory === 'stocks' ? 'Stock' : activeCategory === 'crypto' ? 'Crypto' : 'Forex'} Hit List — Ranked by Confidence Score
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Top{' '}
+              {activeCategory === 'stocks'
+                ? 'Stock'
+                : activeCategory === 'crypto'
+                ? 'Crypto'
+                : 'Forex'}{' '}
+              Hit List — Ranked by Confidence Score
             </h2>
             <span className="text-[11px] text-slate-500">
               Click any card to open its 6-Pane ATS Charts
@@ -586,20 +651,20 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                   type="button"
                   onClick={() => onSelectCandidate(hit.symbol, hit.category)}
                   className={cn(
-                    'flex flex-col justify-between rounded-xl border p-3 text-left transition-all hover:-translate-y-0.5',
+                    'flex flex-col justify-between rounded-xl border p-3 text-left transition-all shadow-sm hover:-translate-y-0.5 bg-white',
                     isShort && hit.isAtWall
-                      ? 'border-rose-500/40 bg-rose-950/20 hover:border-rose-400'
+                      ? 'border-rose-300 bg-rose-50/40 hover:border-rose-500'
                       : hit.direction === 'LONG' && hit.isAtWall
-                      ? 'border-emerald-500/40 bg-emerald-950/20 hover:border-emerald-400'
-                      : 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
+                      ? 'border-emerald-300 bg-emerald-50/40 hover:border-emerald-500'
+                      : 'border-slate-200 hover:border-slate-400'
                   )}
                 >
                   <div className="flex items-center justify-between gap-2 w-full">
                     <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="font-mono text-[10px] text-slate-500">
+                      <span className="font-mono text-[10px] text-slate-400">
                         #{idx + 1}
                       </span>
-                      <span className="font-mono text-sm font-bold text-white truncate">
+                      <span className="font-mono text-sm font-bold text-slate-900 truncate">
                         {hit.displaySymbol}
                       </span>
                     </div>
@@ -608,11 +673,11 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                         'rounded-md border px-1.5 py-0.5 font-mono text-xs font-extrabold shrink-0',
                         hit.confidenceScore >= 70
                           ? isShort
-                            ? 'border-rose-500/50 bg-rose-500/20 text-rose-300'
-                            : 'border-emerald-500/50 bg-emerald-500/20 text-emerald-300'
+                            ? 'border-rose-300 bg-rose-100 text-rose-800'
+                            : 'border-emerald-300 bg-emerald-100 text-emerald-800'
                           : hit.confidenceScore >= 45
-                          ? 'border-amber-500/50 bg-amber-500/20 text-amber-300'
-                          : 'border-slate-700 bg-slate-800 text-slate-300'
+                          ? 'border-amber-300 bg-amber-100 text-amber-800'
+                          : 'border-slate-200 bg-slate-100 text-slate-700'
                       )}
                     >
                       {hit.confidenceScore}%
@@ -620,7 +685,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                   </div>
 
                   <div className="mt-2 flex items-center justify-between text-xs font-mono">
-                    <span className="text-slate-200">
+                    <span className="text-slate-800 font-semibold">
                       {formatPrice(hit.livePrice, hit.category)}
                     </span>
                     <Badge
@@ -637,7 +702,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                     </Badge>
                   </div>
 
-                  <div className="mt-1.5 truncate font-mono text-[10px] text-slate-400 w-full">
+                  <div className="mt-1.5 truncate font-mono text-[10px] text-slate-500 w-full">
                     {hit.activeWallLabel}
                   </div>
                 </button>
@@ -647,14 +712,16 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
         </div>
       )}
 
-      {/* Main ATS Screener Table with Horizon Matrix & Expandable Reasoning */}
-      <Card className="overflow-hidden border-slate-800/90">
+      {/* Main ATS Screener Table */}
+      <Card className="overflow-hidden border-slate-200">
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Ticker &amp; Price</TableHead>
               <TableHead>Setup, Active Wall &amp; Thesis</TableHead>
-              <TableHead>MTF Polarity Horizons (D · W · M · 3M · 6M · 12M)</TableHead>
+              <TableHead>
+                MTF Polarity Horizons (D · W · M · 3M · 6M · 12M)
+              </TableHead>
               <TableHead>Confidence &amp; Steps</TableHead>
               <TableHead>SL &amp; Didi Targets</TableHead>
               <TableHead className="text-right">Explain / Charts</TableHead>
@@ -665,14 +732,19 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
               Array.from({ length: 6 }).map((_, idx) => (
                 <TableRow key={idx} className="animate-pulse">
                   <TableCell colSpan={6} className="py-5">
-                    <div className="h-5 w-full rounded bg-slate-900" />
+                    <div className="h-5 w-full rounded bg-slate-100" />
                   </TableCell>
                 </TableRow>
               ))
             ) : displayedRows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="py-12 text-center text-slate-400">
-                  No matching candidates under the active filters. Try switching Direction to &ldquo;All Directions&rdquo; or disabling &ldquo;Active &le;1% Walls Only&rdquo;.
+                <TableCell
+                  colSpan={6}
+                  className="py-12 text-center text-slate-500"
+                >
+                  No matching candidates under the active filters. Try switching
+                  Direction to &ldquo;All Directions&rdquo; or disabling
+                  &ldquo;Active &le;1% Walls Only&rdquo;.
                 </TableCell>
               </TableRow>
             ) : (
@@ -684,30 +756,30 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                 return (
                   <React.Fragment key={row.symbol}>
                     <TableRow
-                      onClick={() => onSelectCandidate(row.symbol, row.category)}
+                      onClick={() =>
+                        onSelectCandidate(row.symbol, row.category)
+                      }
                       className={cn(
                         'cursor-pointer group transition-colors',
                         row.direction === 'LONG' && row.isAtWall
-                          ? 'bg-emerald-950/15 hover:bg-emerald-950/30'
+                          ? 'bg-emerald-50/40 hover:bg-emerald-50/80'
                           : row.direction === 'SHORT' && row.isAtWall
-                          ? 'bg-rose-950/15 hover:bg-rose-950/30'
-                          : 'hover:bg-slate-900/80'
+                          ? 'bg-rose-50/40 hover:bg-rose-50/80'
+                          : 'hover:bg-slate-50'
                       )}
                     >
                       {/* 1. Ticker & Live Price */}
                       <TableCell className="align-top">
                         <div>
                           <div className="flex items-center gap-1.5">
-                            <span className="font-mono text-sm font-bold text-white group-hover:text-emerald-300 transition-colors">
+                            <span className="font-mono text-sm font-bold text-slate-900 group-hover:text-emerald-700 transition-colors">
                               {row.displaySymbol}
                             </span>
                             {row.isAtWall && (
                               <span
                                 className={cn(
                                   'inline-block h-2 w-2 rounded-full',
-                                  isShort
-                                    ? 'bg-rose-400 shadow-[0_0_8px_#fb7185]'
-                                    : 'bg-emerald-400 shadow-[0_0_8px_#34d399]'
+                                  isShort ? 'bg-rose-600' : 'bg-emerald-600'
                                 )}
                               />
                             )}
@@ -718,13 +790,15 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                             </p>
                           )}
                           <div className="mt-1 flex items-center gap-1.5 font-mono text-xs">
-                            <span className="text-slate-200 font-semibold">
+                            <span className="text-slate-900 font-semibold">
                               {formatPrice(row.livePrice, row.category)}
                             </span>
                             <span
                               className={cn(
-                                'text-[11px]',
-                                isPositive24h ? 'text-emerald-400' : 'text-rose-400'
+                                'text-[11px] font-semibold',
+                                isPositive24h
+                                  ? 'text-emerald-700'
+                                  : 'text-rose-700'
                               )}
                             >
                               {isPositive24h ? '+' : ''}
@@ -734,21 +808,32 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                         </div>
                       </TableCell>
 
-                      {/* 2. Setup Direction, Active Wall & Candidate Thesis */}
-                      <TableCell className="align-top max-w-[310px]">
+                      {/* 2. Setup Direction, Signal Status (Orange vs Vert/Rouge) & Thesis */}
+                      <TableCell className="align-top max-w-[320px]">
                         <div className="space-y-1">
                           <div className="flex flex-wrap items-center gap-1.5">
-                            {row.direction === 'LONG' ? (
-                              <Badge variant="support" className="font-mono text-[10px]">
-                                LONG • SUPPORT
+                            {row.signalStatus === 'CONFIRMED' ? (
+                              <Badge
+                                variant={isShort ? 'resistance' : 'support'}
+                                className="font-mono text-[10px]"
+                              >
+                                {isShort
+                                  ? '● SIGNAL ROUGE CONFIRMÉ'
+                                  : '● SIGNAL VERT CONFIRMÉ'}
                               </Badge>
-                            ) : row.direction === 'SHORT' ? (
-                              <Badge variant="resistance" className="font-mono text-[10px]">
-                                SHORT • RESIST
+                            ) : row.signalStatus === 'CANDIDATE' ? (
+                              <Badge
+                                variant="amber"
+                                className="font-mono text-[10px]"
+                              >
+                                ● SIGNAL ORANGE (Candidat)
                               </Badge>
                             ) : (
-                              <Badge variant="outline" className="font-mono text-[10px]">
-                                NEUTRAL WATCH
+                              <Badge
+                                variant="outline"
+                                className="font-mono text-[10px]"
+                              >
+                                SURVEILLANCE
                               </Badge>
                             )}
 
@@ -766,7 +851,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                             </Badge>
                           </div>
 
-                          <p className="text-xs text-slate-300 leading-snug">
+                          <p className="text-xs text-slate-700 leading-snug">
                             {row.thesisHeadline}
                           </p>
                         </div>
@@ -781,7 +866,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                               return (
                                 <div
                                   key={tf}
-                                  className="rounded border border-slate-800/80 bg-slate-950/60 px-1.5 py-1 text-center font-mono text-[10px] text-slate-600"
+                                  className="rounded border border-slate-200 bg-slate-50 px-1.5 py-1 text-center font-mono text-[10px] text-slate-400"
                                 >
                                   <div>{tf}</div>
                                   <div>N/A</div>
@@ -797,7 +882,9 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                             return (
                               <div
                                 key={tf}
-                                title={`${tf} Horizon — Green Supports (${h.greenCount}): ${
+                                title={`${tf} Horizon — Green Supports (${
+                                  h.greenCount
+                                }): ${
                                   h.greenLines.join(', ') || 'None'
                                 } | Red Resistances (${h.redCount}): ${
                                   h.redLines.join(', ') || 'None'
@@ -806,36 +893,40 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                                   'rounded border px-1.5 py-1 text-center font-mono text-[10px] transition-colors',
                                   hasTouch
                                     ? touchPolarity === 'GREEN'
-                                      ? 'border-emerald-400 bg-emerald-500/20 text-emerald-200 shadow-[0_0_8px_rgba(16,185,129,0.2)]'
-                                      : 'border-rose-400 bg-rose-500/20 text-rose-200 shadow-[0_0_8px_rgba(244,63,94,0.2)]'
+                                      ? 'border-emerald-500 bg-emerald-100 text-emerald-950 ring-1 ring-emerald-400'
+                                      : 'border-rose-500 bg-rose-100 text-rose-950 ring-1 ring-rose-400'
                                     : mostlyGreen
-                                    ? 'border-emerald-500/30 bg-emerald-950/25 text-emerald-300'
+                                    ? 'border-emerald-200 bg-emerald-50/70 text-emerald-900'
                                     : mostlyRed
-                                    ? 'border-rose-500/30 bg-rose-950/25 text-rose-300'
-                                    : 'border-amber-500/30 bg-slate-900 text-amber-200'
+                                    ? 'border-rose-200 bg-rose-50/70 text-rose-900'
+                                    : 'border-amber-200 bg-amber-50/70 text-amber-900'
                                 )}
                               >
                                 <div className="font-bold text-[10px] flex items-center justify-center gap-0.5">
                                   <span>{tf}</span>
                                   {hasTouch && <span>★</span>}
                                 </div>
-                                <div className="text-[9px] tracking-tighter">
-                                  <span className="text-emerald-400">{h.greenCount}G</span>
-                                  <span className="text-slate-500">/</span>
-                                  <span className="text-rose-400">{h.redCount}R</span>
+                                <div className="text-[9px] tracking-tighter font-semibold">
+                                  <span className="text-emerald-700">
+                                    {h.greenCount}G
+                                  </span>
+                                  <span className="text-slate-400">/</span>
+                                  <span className="text-rose-700">
+                                    {h.redCount}R
+                                  </span>
                                 </div>
                               </div>
                             );
                           })}
                         </div>
-                        <div className="mt-1 flex items-center gap-2 text-[10px] text-slate-400 font-mono">
+                        <div className="mt-1 flex items-center gap-2 text-[10px] text-slate-500 font-mono">
                           <span>{row.volatilitySignal}</span>
                           <span>·</span>
                           <span>D-SAR: {row.horizonMatrix.D?.sarState}</span>
                         </div>
                       </TableCell>
 
-                      {/* 4. Confidence Score & Setup Step (1 to 4) */}
+                      {/* 4. Confidence Score & Setup Step */}
                       <TableCell className="align-top">
                         <div className="space-y-1.5 min-w-[155px]">
                           <div className="flex items-center justify-between gap-2">
@@ -843,10 +934,12 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                               className={cn(
                                 'font-mono text-sm font-bold',
                                 row.confidenceScore >= 70
-                                  ? 'text-emerald-400'
+                                  ? isShort
+                                    ? 'text-rose-700'
+                                    : 'text-emerald-700'
                                   : row.confidenceScore >= 45
-                                  ? 'text-amber-300'
-                                  : 'text-slate-400'
+                                  ? 'text-amber-700'
+                                  : 'text-slate-600'
                               )}
                             >
                               {row.confidenceScore}%
@@ -867,57 +960,59 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                             </Badge>
                           </div>
 
-                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
                             <div
                               className={cn(
                                 'h-full rounded-full transition-all',
                                 row.confidenceScore >= 70
-                                  ? 'bg-emerald-400'
+                                  ? isShort
+                                    ? 'bg-rose-600'
+                                    : 'bg-emerald-600'
                                   : row.confidenceScore >= 45
-                                  ? 'bg-amber-400'
-                                  : 'bg-slate-500'
+                                  ? 'bg-amber-500'
+                                  : 'bg-slate-400'
                               )}
                               style={{ width: `${row.confidenceScore}%` }}
                             />
                           </div>
 
-                          <div className="flex items-center gap-1 text-[9px] font-mono">
+                          <div className="flex items-center gap-1 text-[9px] font-mono font-semibold">
                             <span
                               className={cn(
                                 'rounded px-1 border',
                                 row.stepFlags.step1Wall
-                                  ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
-                                  : 'border-slate-800 text-slate-600'
+                                  ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                                  : 'border-slate-200 text-slate-400'
                               )}
                             >
-                              1:Wall
+                              1:Macro
                             </span>
                             <span
                               className={cn(
                                 'rounded px-1 border',
                                 row.stepFlags.step2Didi
-                                  ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
-                                  : 'border-slate-800 text-slate-600'
+                                  ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                                  : 'border-slate-200 text-slate-400'
                               )}
                             >
-                              2:Didi
+                              2:DeeDee
                             </span>
                             <span
                               className={cn(
                                 'rounded px-1 border',
                                 row.stepFlags.step3VolatilityReversal
-                                  ? 'border-sky-500/40 bg-sky-500/15 text-sky-300'
-                                  : 'border-slate-800 text-slate-600'
+                                  ? 'border-sky-300 bg-sky-50 text-sky-800'
+                                  : 'border-slate-200 text-slate-400'
                               )}
                             >
-                              3:BB
+                              3:Phase3
                             </span>
                             <span
                               className={cn(
                                 'rounded px-1 border',
                                 row.stepFlags.step4MacroM20
-                                  ? 'border-amber-500/40 bg-amber-500/15 text-amber-300'
-                                  : 'border-slate-800 text-slate-600'
+                                  ? 'border-amber-300 bg-amber-50 text-amber-800'
+                                  : 'border-slate-200 text-slate-400'
                               )}
                             >
                               4:M20
@@ -926,12 +1021,12 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                         </div>
                       </TableCell>
 
-                      {/* 5. Stop Loss & TP1 (Didi) / TP2 (M20) */}
+                      {/* 5. Stop Loss & Didi Targets */}
                       <TableCell className="align-top">
                         <div className="space-y-1 font-mono text-xs min-w-[180px]">
                           <div className="flex items-center gap-1.5">
                             <span className="text-slate-500">SL:</span>
-                            <span className="text-rose-400 font-semibold">
+                            <span className="text-rose-700 font-bold">
                               {formatPrice(row.stopLoss, row.category)}
                             </span>
                             <span className="text-[10px] text-slate-500">
@@ -942,23 +1037,23 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                           {row.effectiveTargetTP1 ? (
                             <div className="flex flex-wrap items-center gap-1">
                               <span className="text-slate-500">TP1:</span>
-                              <span className="text-emerald-300 font-semibold">
+                              <span className="text-emerald-700 font-bold">
                                 {formatPrice(
                                   row.effectiveTargetTP1.price,
                                   row.category
                                 )}
                               </span>
-                              <span className="text-[10px] text-slate-400">
+                              <span className="text-[10px] text-slate-500">
                                 ({row.effectiveTargetTP1.label})
                               </span>
                             </div>
                           ) : (
-                            <div className="text-slate-500 text-[11px]">
+                            <div className="text-slate-400 text-[11px]">
                               TP1: Open Discovery
                             </div>
                           )}
 
-                          <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                          <div className="flex items-center gap-2 text-[10px] text-slate-500">
                             {row.macroTargetTP2 && (
                               <span>
                                 TP2: {row.macroTargetTP2.label} (
@@ -970,7 +1065,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                               </span>
                             )}
                             {row.riskRewardRatio !== null && (
-                              <span className="text-amber-300 font-semibold">
+                              <span className="text-amber-700 font-bold">
                                 {row.riskRewardRatio.toFixed(2)}x R:R
                               </span>
                             )}
@@ -992,7 +1087,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                               );
                             }}
                           >
-                            <Info className="h-3 w-3 text-sky-400" />
+                            <Info className="h-3 w-3 text-sky-600" />
                             Why?
                             {isExpanded ? (
                               <ChevronUp className="h-3 w-3" />
@@ -1004,7 +1099,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-7 text-emerald-400 hover:text-emerald-300 px-2 text-xs"
+                            className="h-7 text-emerald-700 hover:text-emerald-900 px-2 text-xs font-semibold"
                             onClick={(e) => {
                               e.stopPropagation();
                               onSelectCandidate(row.symbol, row.category);
@@ -1018,7 +1113,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                             <Button
                               variant="ghost"
                               size="icon"
-                              className="h-7 w-7 text-slate-500 hover:text-rose-400"
+                              className="h-7 w-7 text-slate-400 hover:text-rose-600"
                               title="Remove from custom watchlist"
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -1034,14 +1129,18 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
 
                     {/* Expandable Quantitative Reasoning & 6-Horizon Indicator Drawer */}
                     {isExpanded && (
-                      <TableRow className="bg-slate-950/95 hover:bg-slate-950/95">
-                        <TableCell colSpan={6} className="p-4 border-b border-slate-800">
+                      <TableRow className="bg-slate-50/90 hover:bg-slate-50/90">
+                        <TableCell
+                          colSpan={6}
+                          className="p-4 border-b border-slate-200"
+                        >
                           <div className="space-y-4">
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                               <div>
-                                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                                <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                                   <span>
-                                    ATS Quantitative Reasoning — {row.displaySymbol}
+                                    ATS Quantitative Reasoning —{' '}
+                                    {row.displaySymbol}
                                   </span>
                                   <Badge
                                     variant={
@@ -1053,10 +1152,11 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                                     }
                                     className="font-mono text-[10px]"
                                   >
-                                    {row.direction} SETUP ({row.confidenceScore}% CONFIDENCE)
+                                    {row.direction} SETUP ({row.confidenceScore}
+                                    % CONFIDENCE)
                                   </Badge>
                                 </h4>
-                                <ul className="mt-2 space-y-1 text-xs text-slate-300 list-disc pl-5">
+                                <ul className="mt-2 space-y-1 text-xs text-slate-700 list-disc pl-5">
                                   {row.reasoningBullets.map((bullet, bIdx) => (
                                     <li key={bIdx}>{bullet}</li>
                                   ))}
@@ -1075,33 +1175,32 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                               </Button>
                             </div>
 
-                            {/* Detailed 6-Timeframe Support & Resistance Indicator Breakdown */}
                             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
                               {ALL_TIMEFRAMES.map((tf) => {
                                 const h = row.horizonMatrix[tf];
                                 return (
                                   <div
                                     key={tf}
-                                    className="rounded-lg border border-slate-800 bg-slate-900/60 p-2.5 space-y-1.5 text-xs"
+                                    className="rounded-lg border border-slate-200 bg-white p-2.5 space-y-1.5 text-xs shadow-sm"
                                   >
-                                    <div className="flex items-center justify-between border-b border-slate-800 pb-1">
-                                      <span className="font-mono font-bold text-white">
+                                    <div className="flex items-center justify-between border-b border-slate-100 pb-1">
+                                      <span className="font-mono font-bold text-slate-900">
                                         {tf} Horizon
                                       </span>
-                                      <span className="font-mono text-[10px]">
-                                        <span className="text-emerald-400 font-semibold">
+                                      <span className="font-mono text-[10px] font-semibold">
+                                        <span className="text-emerald-700">
                                           {h.greenCount}G
                                         </span>{' '}
                                         /{' '}
-                                        <span className="text-rose-400 font-semibold">
+                                        <span className="text-rose-700">
                                           {h.redCount}R
                                         </span>
                                       </span>
                                     </div>
 
                                     {h.wallTouches.length > 0 && (
-                                      <div className="rounded bg-slate-950/90 px-1.5 py-1 font-mono text-[10px]">
-                                        <span className="text-amber-300 font-semibold">
+                                      <div className="rounded bg-amber-50 border border-amber-200 px-1.5 py-1 font-mono text-[10px] text-amber-900">
+                                        <span className="font-bold">
                                           ★ Wall Touch (&le;1%):{' '}
                                         </span>
                                         {h.wallTouches
@@ -1116,10 +1215,10 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                                     )}
 
                                     <div className="text-[11px]">
-                                      <span className="text-emerald-400 font-semibold">
+                                      <span className="text-emerald-700 font-semibold">
                                         Supports:{' '}
                                       </span>
-                                      <span className="font-mono text-slate-300">
+                                      <span className="font-mono text-slate-700">
                                         {h.greenLines.length > 0
                                           ? h.greenLines.join(', ')
                                           : 'None'}
@@ -1127,17 +1226,17 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                                     </div>
 
                                     <div className="text-[11px]">
-                                      <span className="text-rose-400 font-semibold">
+                                      <span className="text-rose-700 font-semibold">
                                         Resistances:{' '}
                                       </span>
-                                      <span className="font-mono text-slate-300">
+                                      <span className="font-mono text-slate-700">
                                         {h.redLines.length > 0
                                           ? h.redLines.join(', ')
                                           : 'None'}
                                       </span>
                                     </div>
 
-                                    <div className="flex items-center justify-between pt-1 border-t border-slate-800/70 font-mono text-[10px] text-slate-400">
+                                    <div className="flex items-center justify-between pt-1 border-t border-slate-100 font-mono text-[10px] text-slate-500">
                                       <span>BB: {h.bbState}</span>
                                       <span>SAR: {h.sarState}</span>
                                     </div>
@@ -1157,7 +1256,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
         </Table>
 
         {filteredRows.length > visibleLimit && (
-          <div className="flex items-center justify-center border-t border-slate-800 p-3 bg-slate-950/70">
+          <div className="flex items-center justify-center border-t border-slate-200 p-3 bg-slate-50">
             <Button
               variant="outline"
               size="sm"

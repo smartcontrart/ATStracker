@@ -480,6 +480,8 @@ function trimVisualSeriesForTransport(
   return {
     ...tfData,
     bars: trimmedBars,
+    sma7: tfData.sma7.filter((pt) => pt.time >= minTime),
+    sma20: tfData.sma20.filter((pt) => pt.time >= minTime),
     bollingerBands: tfData.bollingerBands.filter((pt) => pt.time >= minTime),
     parabolicSAR: tfData.parabolicSAR.filter((pt) => pt.time >= minTime),
   };

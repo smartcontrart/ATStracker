@@ -120,7 +120,7 @@ export const useATSStore = create<ATSStoreState>()(
     (set, get) => ({
       watchlists: DEFAULT_WATCHLISTS,
       universePreset: {
-        stocks: 'sp500',
+        stocks: 'all_combined',
         crypto: 'top100',
         forex: 'top50',
       },
@@ -350,7 +350,7 @@ export const useATSStore = create<ATSStoreState>()(
         })),
     }),
     {
-      name: 'ats-mtf-screener-storage-v2',
+      name: 'ats-mtf-screener-storage-v3',
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         watchlists: state.watchlists,

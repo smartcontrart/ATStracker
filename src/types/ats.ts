@@ -10,6 +10,21 @@ export const ALL_TIMEFRAMES: readonly Timeframe[] = [
   '6M',
   '12M',
 ] as const;
+
+/**
+ * 6-Pane Chart Grid Order:
+ * Top row:    Jour (D)  -> Semaine (W)   -> Mois (M)
+ * Bottom row: Année (12M) -> Semestre (6M) -> Trimestre (3M)
+ */
+export const CHART_GRID_TIMEFRAMES: readonly Timeframe[] = [
+  'D',
+  'W',
+  'M',
+  '12M',
+  '6M',
+  '3M',
+] as const;
+
 export const HIGHER_TIMEFRAMES: readonly Timeframe[] = [
   'W',
   'M',
@@ -19,16 +34,17 @@ export const HIGHER_TIMEFRAMES: readonly Timeframe[] = [
 ] as const;
 
 export const TIMEFRAME_LABELS: Record<Timeframe, string> = {
-  D: 'Daily (D)',
-  W: 'Weekly (W)',
-  M: 'Monthly (M)',
-  '3M': 'Quarterly (3M)',
-  '6M': 'Bi-Annual (6M)',
-  '12M': 'Annual (12M)',
+  D: 'Jour (1D)',
+  W: 'Semaine (1W)',
+  M: 'Mois (1M)',
+  '3M': 'Trimestre (3M)',
+  '6M': 'Semestre (6M)',
+  '12M': 'Année (12M)',
 };
 
 export type ATSPolarity = 'GREEN' | 'RED';
 export type SetupDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
+export type SetupConfirmationStatus = 'CONFIRMED' | 'CANDIDATE' | 'WATCH';
 
 export type JackLineKey = 'Jack_Minus1' | 'Jack_0' | 'Jack_Plus1';
 export type OggyLineKey = 'Oggy_Minus1' | 'Oggy_0' | 'Oggy_Plus1';
@@ -62,6 +78,14 @@ export interface ATSBaseline {
   price: number;
   /** GREEN = Support (currentPrice >= price), RED = Resistance (currentPrice < price) */
   polarity: ATSPolarity;
+  /** True if price pierced decisively beyond the AT.S "Autour" tolerance (no longer active) */
+  isPierced: boolean;
+  /** Elastic AT.S "Autour" classification around the baseline */
+  autourZone: 'EXACT' | 'APPROACH' | 'OVERSHOOT_AUTOUR' | 'DISTANT' | 'PIERCED';
+  /** Continuous 0..1 quality weight in the AT.S "Autour" model */
+  autourWeight: number;
+  /** True if unpierced AND price is within visual approach range on this timeframe */
+  shouldPlotOnChart: boolean;
   /** Historical bar date at t - offset */
   referenceTime: string;
   /** Historical bucket label at t - offset */
@@ -85,6 +109,13 @@ export interface OggyMatrix {
   Oggy_Plus1: ATSBaseline | null;
 }
 
+export interface MovingAveragePoint {
+  time: string;
+  value: number;
+  /** True when current Price >= MA or MA is rising (AT.S green vs red polarity) */
+  isGreen: boolean;
+}
+
 export interface BollingerBandPoint {
   time: string;
   upper: number;
@@ -92,14 +123,18 @@ export interface BollingerBandPoint {
   lower: number;
   stdDev: number;
   bandwidth: number;
+  upperGreen: boolean;
+  midGreen: boolean;
+  lowerGreen: boolean;
 }
 
 export interface ParabolicSARPoint {
   time: string;
+  /** Plotted tmpSAR[1] per AT.S Wilder specification */
   value: number;
-  /** true = dots below price (bullish trend), false = dots above price (bearish trend) */
+  /** tendance[1] == 1 => true (green), else false (red) */
   isBullish: boolean;
-  /** true when SAR switched polarity on this specific bar */
+  /** true when SAR switched polarity on this bar */
   isFlip: boolean;
   af: number;
 }
@@ -114,9 +149,25 @@ export interface DidiTarget {
     | 'HTF_BB_Upper'
     | 'Green_Jack'
     | 'Green_Oggy'
-    | 'HTF_BB_Lower';
+    | 'HTF_BB_Lower'
+    | 'SMA7'
+    | 'SMA20';
   /** Absolute move % toward target from livePrice */
   upsidePct: number;
+}
+
+export interface TimeframeSetup1234 {
+  status: 'CONFIRMED' | 'CANDIDATE' | 'NONE';
+  isBull: boolean;
+  signalBarTime: string | null;
+  signalPriceLevel: number | null;
+  confluenceText: string;
+  /** Objective 1: SMA 7 (first black target dot / bille noire) */
+  tp1Sma7: number | null;
+  /** Objective 2: SMA 20 (second black target dot / bille noire) */
+  tp2Sma20: number | null;
+  tp1Hit: boolean;
+  tp2Hit: boolean;
 }
 
 export interface TimeframeATSData {
@@ -124,6 +175,10 @@ export interface TimeframeATSData {
   bars: OHLCVBar[];
   Jack: JackMatrix;
   Oggy: OggyMatrix;
+  sma7: MovingAveragePoint[];
+  sma20: MovingAveragePoint[];
+  latestSMA7: MovingAveragePoint | null;
+  latestSMA20: MovingAveragePoint | null;
   bollingerBands: BollingerBandPoint[];
   latestBB: BollingerBandPoint | null;
   /** Step 3 check: whether the opposite Bollinger Band has started curving inwards */
@@ -132,29 +187,28 @@ export interface TimeframeATSData {
   bbCompressing: boolean;
   parabolicSAR: ParabolicSARPoint[];
   latestSAR: ParabolicSARPoint | null;
-  /** Whether SAR flipped bullish on recent bar */
   sarFlippedBullishRecently: boolean;
-  /** Whether SAR flipped bearish on recent bar */
   sarFlippedBearishRecently: boolean;
-  /** Nearest overhead resistance on this specific timeframe */
   Didi: DidiTarget | null;
+  setup1234: TimeframeSetup1234;
 }
 
 export interface MacroTargetTP2 {
   price: number;
   label: string;
   timeframe: Timeframe;
-  /** Signed % move from livePrice to M20 */
   upsidePct: number;
 }
 
 export interface TimeframeHorizonSummary {
   timeframe: Timeframe;
+  /** Count of UNPIERCED Green Support baselines */
   greenCount: number;
+  /** Count of UNPIERCED Red Resistance baselines */
   redCount: number;
+  piercedCount: number;
   greenLines: string[];
   redLines: string[];
-  /** Any Jack/Oggy lines within 1.0% proximity on this timeframe */
   wallTouches: Array<{
     shortName: string;
     label: string;
@@ -164,6 +218,7 @@ export interface TimeframeHorizonSummary {
   }>;
   bbState: 'CURVING_IN' | 'COMPRESSING' | 'EXPANDING' | 'NA';
   sarState: 'BULL_FLIP' | 'BEAR_FLIP' | 'BULL' | 'BEAR' | 'NA';
+  m7Price: number | null;
   m20Price: number | null;
 }
 
@@ -174,29 +229,20 @@ export interface ScreenerResult {
   category: AssetCategory;
   livePrice: number;
   change24hPct: number;
-  /** Setup trade bias: LONG (at Green Support Wall), SHORT (at Red Resistance Wall), or NEUTRAL */
   direction: SetupDirection;
-  /** True when touching either a Support Wall (<=1%) or Resistance Wall (<=1%) */
+  /** CONFIRMED = Signal Vert/Rouge (opposite BB turned), CANDIDATE = Signal Orange, WATCH = off-wall */
+  signalStatus: SetupConfirmationStatus;
   isAtWall: boolean;
   isAtSupportWall: boolean;
   isAtResistanceWall: boolean;
-  /** Primary active MTF wall line label (e.g., "M-Jack_0") */
   activeWallLabel: string;
-  /** Price of the primary Wall (Support or Resistance) */
   wallPrice: number | null;
-  /** Absolute percentage proximity to the primary Wall */
   wallProximityPct: number | null;
-  /** Overlapping HTF Green Support lines within 1% below livePrice */
   confluentWallLines: ATSBaseline[];
-  /** Overlapping HTF Red Resistance lines within 1% above livePrice */
   confluentResistanceLines: ATSBaseline[];
-  /** Nearest HTF Green support overall */
   nearestGreenSupport: ATSBaseline | null;
-  /** Nearest HTF Red resistance overall */
   nearestRedResistance: ATSBaseline | null;
-  /** Confidence Score (0 - 100) */
   confidenceScore: number;
-  /** Current completed ATS Setup Step (0 to 4) */
   setupStep: 0 | 1 | 2 | 3 | 4;
   stepFlags: {
     step1Wall: boolean;
@@ -204,27 +250,16 @@ export interface ScreenerResult {
     step3VolatilityReversal: boolean;
     step4MacroM20: boolean;
   };
-  /** Volatility reversal detail */
   volatilitySignal: string;
-  /** Stop Loss (1% below Support Wall for LONG, 1% above Resistance Wall for SHORT) */
   stopLoss: number;
-  /** Risk percentage from livePrice to stopLoss */
   riskPct: number;
-  /** Overhead resistance target (TP1 for LONG) */
   Didi: DidiTarget | null;
-  /** Downside support target (TP1 for SHORT) */
   downsideDidi: DidiTarget | null;
-  /** Active TP1 target aligned with setup direction (Didi for LONG, downsideDidi for SHORT) */
   effectiveTargetTP1: DidiTarget | null;
-  /** Step 4: Macro Target (TP2 - Higher Timeframe M20) */
   macroTargetTP2: MacroTargetTP2 | null;
-  /** Reward-to-Risk ratio to effectiveTargetTP1 */
   riskRewardRatio: number | null;
-  /** Per-timeframe (D, W, M, 3M, 6M, 12M) support/resistance indicator breakdown */
   horizonMatrix: Record<Timeframe, TimeframeHorizonSummary>;
-  /** Concise 1-line quantitative thesis explaining why this candidate ranks where it does */
   thesisHeadline: string;
-  /** Detailed bullet points explaining Support/Resistance confluence, Volatility, and Targets */
   reasoningBullets: string[];
 }
 

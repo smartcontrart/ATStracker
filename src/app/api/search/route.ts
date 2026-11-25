@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import YahooFinance from 'yahoo-finance2';
 import {
+  MASTER_STOCKS_UNIVERSE,
   TOP_50_FOREX_TICKERS,
   TOP_100_CRYPTO_TICKERS,
-  UNIQUE_SP500_TICKERS,
 } from '@/lib/assetUniverses';
 import { normalizeTickerForCategory } from '@/lib/marketDataFetcher';
 import type { AssetCategory } from '@/types/ats';
@@ -185,13 +185,13 @@ function buildLocalMatches(rawQuery: string): AssetSearchItem[] {
     }
   }
 
-  // 4. Exact / prefix S&P 500 ticker matches
-  for (const sSym of UNIQUE_SP500_TICKERS) {
+  // 4. Exact / prefix Tracked Stock Universe matches (S&P 500 + 14 AT.S Thematic Lists)
+  for (const sSym of MASTER_STOCKS_UNIVERSE) {
     if (sSym === q || sSym.startsWith(q)) {
       matches.push({
         symbol: sSym,
         displaySymbol: sSym,
-        name: `${sSym} (S&P 500 Constituent)`,
+        name: `${sSym} (Tracked Universe)`,
         category: 'stocks',
         exchange: 'US Equity',
         typeLabel: 'Stock / ETF',
@@ -275,8 +275,8 @@ export async function GET(request: NextRequest) {
     if (!existing) {
       mergedMap.set(key, item);
     } else if (
-      existing.name.includes('S&P 500 Constituent') &&
-      !item.name.includes('S&P 500 Constituent')
+      existing.name.includes('Tracked Universe') &&
+      !item.name.includes('Tracked Universe')
     ) {
       mergedMap.set(key, item);
     }

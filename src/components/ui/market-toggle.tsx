@@ -35,7 +35,7 @@ export const MarketToggle: React.FC<MarketToggleProps> = ({
       role="group"
       aria-label="Switch Asset Class"
       className={cn(
-        'inline-grid grid-cols-3 rounded-xl border border-slate-700/90 bg-slate-950 p-1 shadow-inner',
+        'inline-grid grid-cols-3 rounded-xl border border-slate-200 bg-slate-100 p-1',
         fullWidth && 'w-full',
         className
       )}
@@ -49,10 +49,12 @@ export const MarketToggle: React.FC<MarketToggleProps> = ({
             onClick={() => onChange(id)}
             className={cn(
               'inline-flex items-center justify-center gap-1.5 rounded-lg font-semibold transition-all',
-              size === 'sm' ? 'px-2.5 py-1.5 text-xs' : 'px-3.5 py-1.5 text-xs sm:text-sm',
+              size === 'sm'
+                ? 'px-2.5 py-1.5 text-xs'
+                : 'px-3.5 py-1.5 text-xs sm:text-sm',
               isActive
-                ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20 font-bold'
-                : 'text-slate-400 hover:bg-slate-900 hover:text-slate-100'
+                ? 'bg-white text-emerald-700 shadow-sm ring-1 ring-slate-200 font-bold'
+                : 'text-slate-600 hover:text-slate-900'
             )}
           >
             <Icon className="h-3.5 w-3.5 shrink-0" />

@@ -179,7 +179,7 @@ export const ATSDashboard: React.FC = () => {
   );
 
   return (
-    <div className="flex min-h-screen flex-col bg-[#050810] text-slate-100 lg:flex-row">
+    <div className="flex min-h-screen flex-col bg-slate-50 text-slate-900 lg:flex-row">
       <Sidebar
         onNavigateView={handleNavigateView}
         onSelectAsset={handleSelectCandidate}

@@ -13,6 +13,7 @@ import {
 } from 'lightweight-charts';
 import { BollingerBandCloudPrimitive } from '@/components/charts/bollingerBandPrimitive';
 import type { CrosshairSyncBus } from '@/components/charts/crosshairSyncBus';
+import { ParabolicSARDotsPrimitive } from '@/components/charts/parabolicSarPrimitive';
 import { Badge } from '@/components/ui/badge';
 import { flattenTimeframeBaselines } from '@/lib/atsIndicators';
 import { findCorrespondingBarForDate } from '@/lib/dataResampler';
@@ -62,12 +63,13 @@ export const ATSChart: React.FC<ATSChartProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const barSeriesRef = useRef<ISeriesApi<'Bar'> | null>(null);
   const bbUpperAreaSeriesRef = useRef<ISeriesApi<'Area'> | null>(null);
-  const bbMidLineSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const sma20LineSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const sma7LineSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const bbLowerLineSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
-  const sarSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const bbCloudPrimitiveRef = useRef<BollingerBandCloudPrimitive | null>(null);
+  const sarPrimitiveRef = useRef<ParabolicSARDotsPrimitive | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const isProgrammaticSyncRef = useRef(false);
 
@@ -79,7 +81,7 @@ export const ATSChart: React.FC<ATSChartProps> = ({
     setHudBar(data.bars.length > 0 ? data.bars[data.bars.length - 1] : null);
   }, [data.bars]);
 
-  // 1. Initialize Lightweight Chart & Series
+  // 1. Initialize Light-Theme Chart with Black OHLC Bars, Yellow BB Cloud, M7/M20 & SAR Wilder AT.S
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -92,106 +94,110 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       width: container.clientWidth,
       height: container.clientHeight,
       layout: {
-        background: { type: ColorType.Solid, color: '#070b14' },
-        textColor: '#94a3b8',
+        background: { type: ColorType.Solid, color: '#ffffff' },
+        textColor: '#334155',
         fontSize: 11,
       },
       grid: {
-        vertLines: { color: 'rgba(30, 41, 59, 0.45)' },
-        horzLines: { color: 'rgba(30, 41, 59, 0.45)' },
+        vertLines: { color: '#e5e7eb' },
+        horzLines: { color: '#e5e7eb' },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
         vertLine: {
-          color: 'rgba(148, 163, 184, 0.5)',
+          color: '#64748b',
           width: 1,
           style: LineStyle.Dashed,
-          labelBackgroundColor: '#1e293b',
+          labelBackgroundColor: '#0f172a',
         },
         horzLine: {
-          color: 'rgba(148, 163, 184, 0.5)',
+          color: '#64748b',
           width: 1,
           style: LineStyle.Dashed,
-          labelBackgroundColor: '#1e293b',
+          labelBackgroundColor: '#0f172a',
         },
       },
       rightPriceScale: {
-        borderColor: 'rgba(30, 41, 59, 0.9)',
-        scaleMargins: { top: 0.1, bottom: 0.1 },
+        borderColor: '#cbd5e1',
+        scaleMargins: { top: 0.09, bottom: 0.09 },
       },
       timeScale: {
-        borderColor: 'rgba(30, 41, 59, 0.9)',
+        borderColor: '#cbd5e1',
         timeVisible: false,
         rightOffset: 4,
       },
+      handleScroll: true,
+      handleScale: true,
     });
 
-    // Bollinger Band Upper as an AreaSeries + custom bounded cloud primitive
+    // 1. Bollinger Band Upper + Warm Light-Yellow Bounded Cloud
     const bbUpperArea = chart.addAreaSeries({
-      lineColor: 'rgba(56, 189, 248, 0.65)',
-      topColor: 'rgba(56, 189, 248, 0.04)',
-      bottomColor: 'rgba(56, 189, 248, 0.0)',
-      lineWidth: 1,
+      lineColor: '#16a34a',
+      topColor: 'rgba(254, 249, 195, 0.0)',
+      bottomColor: 'rgba(254, 249, 195, 0.0)',
+      lineWidth: 2,
       priceLineVisible: false,
       lastValueVisible: false,
       crosshairMarkerVisible: false,
       priceFormat: { type: 'price', precision: pricePrecision, minMove },
     });
 
-    const bbCloud = new BollingerBandCloudPrimitive('rgba(56, 189, 248, 0.10)');
+    const bbCloud = new BollingerBandCloudPrimitive('rgba(254, 249, 195, 0.78)');
     bbUpperArea.attachPrimitive(bbCloud);
 
-    // Bollinger Band Mid (M20)
-    const bbMidLine = chart.addLineSeries({
-      color: 'rgba(125, 211, 252, 0.55)',
-      lineWidth: 1,
-      lineStyle: LineStyle.Dashed,
+    // 2. M20 (SMA 20 / BB Mid) — Green or Red
+    const sma20Line = chart.addLineSeries({
+      color: '#16a34a',
+      lineWidth: 2,
+      lineStyle: LineStyle.Solid,
       priceLineVisible: false,
       lastValueVisible: false,
       crosshairMarkerVisible: false,
       priceFormat: { type: 'price', precision: pricePrecision, minMove },
     });
 
-    // Bollinger Band Lower
+    // 3. M7 (SMA 7) — Green or Red
+    const sma7Line = chart.addLineSeries({
+      color: '#16a34a',
+      lineWidth: 2,
+      lineStyle: LineStyle.Solid,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+      priceFormat: { type: 'price', precision: pricePrecision, minMove },
+    });
+
+    // 4. Bollinger Band Lower — Green or Red
     const bbLowerLine = chart.addLineSeries({
-      color: 'rgba(56, 189, 248, 0.65)',
-      lineWidth: 1,
+      color: '#16a34a',
+      lineWidth: 2,
       priceLineVisible: false,
       lastValueVisible: false,
       crosshairMarkerVisible: false,
       priceFormat: { type: 'price', precision: pricePrecision, minMove },
     });
 
-    // Main Candlesticks (OHLC)
-    const candleSeries = chart.addCandlestickSeries({
-      upColor: '#10b981',
-      downColor: '#ef4444',
-      borderUpColor: '#10b981',
-      borderDownColor: '#ef4444',
-      wickUpColor: '#10b981',
-      wickDownColor: '#ef4444',
+    // 5. Force Black OHLC Bar Charts (`barcolor(color.black)`, Open & Close ticks visible)
+    const barSeries = chart.addBarSeries({
+      upColor: '#000000',
+      downColor: '#000000',
+      openVisible: true,
+      thinBars: false,
       priceFormat: { type: 'price', precision: pricePrecision, minMove },
     });
 
-    // Parabolic SAR rendered strictly as dots (lineVisible: false, pointMarkersVisible: true)
-    const sarSeries = chart.addLineSeries({
-      color: '#38bdf8',
-      lineVisible: false,
-      pointMarkersVisible: true,
-      pointMarkersRadius: 2.2,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      crosshairMarkerVisible: false,
-      priceFormat: { type: 'price', precision: pricePrecision, minMove },
-    });
+    // 6. SAR Wilder AT.S circles + Setup 1-2-3-4 ("2 billes noires" & Signal Orange/Vert)
+    const sarPrimitive = new ParabolicSARDotsPrimitive();
+    barSeries.attachPrimitive(sarPrimitive);
 
     chartRef.current = chart;
-    candleSeriesRef.current = candleSeries;
+    barSeriesRef.current = barSeries;
     bbUpperAreaSeriesRef.current = bbUpperArea;
-    bbMidLineSeriesRef.current = bbMidLine;
+    sma20LineSeriesRef.current = sma20Line;
+    sma7LineSeriesRef.current = sma7Line;
     bbLowerLineSeriesRef.current = bbLowerLine;
-    sarSeriesRef.current = sarSeries;
     bbCloudPrimitiveRef.current = bbCloud;
+    sarPrimitiveRef.current = sarPrimitive;
 
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
@@ -208,26 +214,34 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       priceLinesRef.current = [];
       chart.remove();
       chartRef.current = null;
-      candleSeriesRef.current = null;
+      barSeriesRef.current = null;
     };
-  }, [category]); // Recreate only if category precision model changes
+  }, [category]);
 
-  // 2. Populate Candlestick, Bollinger Band, Parabolic SAR, and Jack/Oggy PriceLines
+  // 2. Populate Black OHLC Bars, BB + M7/M20, SAR Wilder AT.S, and Unpierced Proximate Jack/Oggy
   useEffect(() => {
     const chart = chartRef.current;
-    const candleSeries = candleSeriesRef.current;
+    const barSeries = barSeriesRef.current;
     const bbUpper = bbUpperAreaSeriesRef.current;
-    const bbMid = bbMidLineSeriesRef.current;
+    const sma20Line = sma20LineSeriesRef.current;
+    const sma7Line = sma7LineSeriesRef.current;
     const bbLower = bbLowerLineSeriesRef.current;
-    const sarSeries = sarSeriesRef.current;
     const bbCloud = bbCloudPrimitiveRef.current;
+    const sarPrimitive = sarPrimitiveRef.current;
 
-    if (!chart || !candleSeries || !bbUpper || !bbMid || !bbLower || !sarSeries) {
+    if (
+      !chart ||
+      !barSeries ||
+      !bbUpper ||
+      !sma20Line ||
+      !sma7Line ||
+      !bbLower
+    ) {
       return;
     }
 
-    // Set OHLC candlesticks
-    candleSeries.setData(
+    // Black OHLC Bars
+    barSeries.setData(
       data.bars.map((b) => ({
         time: b.time as Time,
         open: b.open,
@@ -237,62 +251,67 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       }))
     );
 
-    // Set Bollinger Bands (20, 2) + Shaded Cloud
+    // Bollinger Bands + M20 + M7 colored Green (#16a34a) or Red (#dc2626)
     if (preferences.showBollinger && data.bollingerBands.length > 0) {
       bbUpper.setData(
         data.bollingerBands.map((pt) => ({
           time: pt.time as Time,
           value: pt.upper,
+          lineColor: pt.upperGreen ? '#16a34a' : '#dc2626',
         }))
       );
-      bbMid.setData(
-        data.bollingerBands.map((pt) => ({
+      sma20Line.setData(
+        data.sma20.map((pt) => ({
           time: pt.time as Time,
-          value: pt.mid,
+          value: pt.value,
+          color: pt.isGreen ? '#16a34a' : '#dc2626',
+        }))
+      );
+      sma7Line.setData(
+        data.sma7.map((pt) => ({
+          time: pt.time as Time,
+          value: pt.value,
+          color: pt.isGreen ? '#16a34a' : '#dc2626',
         }))
       );
       bbLower.setData(
         data.bollingerBands.map((pt) => ({
           time: pt.time as Time,
           value: pt.lower,
+          color: pt.lowerGreen ? '#16a34a' : '#dc2626',
         }))
       );
       bbCloud?.setData(data.bollingerBands, true);
     } else {
       bbUpper.setData([]);
-      bbMid.setData([]);
+      sma20Line.setData([]);
+      sma7Line.setData([]);
       bbLower.setData([]);
       bbCloud?.setData([], false);
     }
 
-    // Set Parabolic SAR Dots (colored by bullish/bearish polarity & gold on exact Flip)
-    if (preferences.showSAR && data.parabolicSAR.length > 0) {
-      sarSeries.setData(
-        data.parabolicSAR.map((pt) => ({
-          time: pt.time as Time,
-          value: pt.value,
-          color: pt.isFlip
-            ? '#facc15'
-            : pt.isBullish
-            ? '#22c55e'
-            : '#f43f5e',
-        }))
-      );
-    } else {
-      sarSeries.setData([]);
-    }
+    // SAR Wilder AT.S + Setup 1-2-3-4 ("2 billes noires" at M7 & M20)
+    const lastBarTime =
+      data.bars.length > 0 ? data.bars[data.bars.length - 1].time : null;
+    sarPrimitive?.setData(
+      data.parabolicSAR,
+      preferences.showSAR,
+      data.setup1234,
+      lastBarTime,
+      preferences.showDidi
+    );
 
-    // Remove previous Jack/Oggy/Didi price lines cleanly
+    // Clear previous Jack/Oggy horizontal lines
     for (const pl of priceLinesRef.current) {
       try {
-        candleSeries.removePriceLine(pl);
+        barSeries.removePriceLine(pl);
       } catch {
-        // Ignore stale reference
+        // Ignore stale line
       }
     }
     priceLinesRef.current = [];
 
-    // Draw ATS Jack (-1, 0, +1) horizontal baselines via createPriceLine
+    // Strict AT.S Rule: Draw Jack (+1/0/-1) ONLY if proximate AND unpierced (`shouldPlotOnChart`)
     if (preferences.showJack) {
       const jackEntries = [
         data.Jack.Jack_Minus1,
@@ -300,11 +319,11 @@ export const ATSChart: React.FC<ATSChartProps> = ({
         data.Jack.Jack_Plus1,
       ];
       for (const line of jackEntries) {
-        if (!line) continue;
+        if (!line || !line.shouldPlotOnChart) continue;
         const isZero = line.key === 'Jack_0';
-        const strictColor = line.polarity === 'GREEN' ? '#22c55e' : '#ef4444';
+        const strictColor = line.polarity === 'GREEN' ? '#16a34a' : '#dc2626';
 
-        const created = candleSeries.createPriceLine({
+        const created = barSeries.createPriceLine({
           price: line.price,
           color: strictColor,
           lineWidth: isZero ? 2 : 1,
@@ -316,7 +335,7 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       }
     }
 
-    // Draw ATS Oggy (-1, 0, +1) horizontal baselines via createPriceLine
+    // Strict AT.S Rule: Draw Oggy (+1/0/-1) ONLY if proximate AND unpierced (`shouldPlotOnChart`)
     if (preferences.showOggy) {
       const oggyEntries = [
         data.Oggy.Oggy_Minus1,
@@ -324,15 +343,15 @@ export const ATSChart: React.FC<ATSChartProps> = ({
         data.Oggy.Oggy_Plus1,
       ];
       for (const line of oggyEntries) {
-        if (!line) continue;
+        if (!line || !line.shouldPlotOnChart) continue;
         const isZero = line.key === 'Oggy_0';
-        const strictColor = line.polarity === 'GREEN' ? '#22c55e' : '#ef4444';
+        const strictColor = line.polarity === 'GREEN' ? '#16a34a' : '#dc2626';
 
-        const created = candleSeries.createPriceLine({
+        const created = barSeries.createPriceLine({
           price: line.price,
           color: strictColor,
           lineWidth: isZero ? 2 : 1,
-          lineStyle: isZero ? LineStyle.LargeDashed : LineStyle.Dotted,
+          lineStyle: isZero ? LineStyle.Solid : LineStyle.Dotted,
           axisLabelVisible: true,
           title: OGGY_SHORT_NAMES[line.key] || line.key,
         });
@@ -340,30 +359,13 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       }
     }
 
-    // Optional Didi Upper-BB target marker if Didi originates from BB_Upper
-    if (
-      preferences.showDidi &&
-      data.Didi &&
-      data.Didi.sourceType === 'HTF_BB_Upper'
-    ) {
-      const didiLine = candleSeries.createPriceLine({
-        price: data.Didi.price,
-        color: '#f59e0b',
-        lineWidth: 1,
-        lineStyle: LineStyle.SparseDotted,
-        axisLabelVisible: true,
-        title: 'Didi (BB)',
-      });
-      priceLinesRef.current.push(didiLine);
-    }
-
-    // Show a smart default viewport (~last 90 bars or full series if shorter)
+    // Default Viewport: Strictly Last 25 Periods (-25 barres par défaut), zoomable in/out
     const totalBars = data.bars.length;
     if (totalBars > 0) {
-      const visibleWindow = Math.min(totalBars, data.timeframe === 'D' ? 110 : 65);
+      const defaultPeriods = 25;
       chart.timeScale().setVisibleLogicalRange({
-        from: Math.max(0, totalBars - visibleWindow),
-        to: totalBars + 4,
+        from: Math.max(0, totalBars - defaultPeriods),
+        to: totalBars + 3.5,
       });
     }
   }, [
@@ -375,11 +377,11 @@ export const ATSChart: React.FC<ATSChartProps> = ({
     preferences.showDidi,
   ]);
 
-  // 3. Crosshair Synchronization across D, W, M, 3M, 6M, 12M
+  // 3. Crosshair Synchronization across D, W, M, 12M, 6M, 3M
   useEffect(() => {
     const chart = chartRef.current;
-    const candleSeries = candleSeriesRef.current;
-    if (!chart || !candleSeries) return;
+    const barSeries = barSeriesRef.current;
+    if (!chart || !barSeries) return;
 
     const barMap = new Map<string, OHLCVBar>();
     for (const b of data.bars) {
@@ -404,7 +406,6 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       }
 
       if (preferences.syncCrosshair && syncBus) {
-        // Use periodEnd on HTF bars so hovering Monthly/Annual maps cleanly to latest day in that period
         const broadcastDate = matched ? matched.periodEnd : dateStr;
         syncBus.emit(data.timeframe, broadcastDate);
       }
@@ -436,7 +437,7 @@ export const ATSChart: React.FC<ATSChartProps> = ({
             chart.setCrosshairPosition(
               targetBar.close,
               targetBar.time as Time,
-              candleSeries
+              barSeries
             );
             setHudBar(targetBar);
           }
@@ -452,115 +453,130 @@ export const ATSChart: React.FC<ATSChartProps> = ({
     };
   }, [data.bars, data.timeframe, preferences.syncCrosshair, syncBus]);
 
-  const allLines = flattenTimeframeBaselines(data.Jack, data.Oggy);
-  const greenCount = allLines.filter((l) => l.polarity === 'GREEN').length;
-  const redCount = allLines.filter((l) => l.polarity === 'RED').length;
+  const unpiercedLines = flattenTimeframeBaselines(data.Jack, data.Oggy, true);
+  const greenCount = unpiercedLines.filter((l) => l.polarity === 'GREEN').length;
+  const redCount = unpiercedLines.filter((l) => l.polarity === 'RED').length;
 
   return (
     <div
       className={cn(
-        'flex flex-col rounded-xl border bg-slate-950/90 overflow-hidden transition-all',
+        'flex flex-col rounded-xl border bg-white overflow-hidden transition-all shadow-sm',
         wallHighlightType === 'RESISTANCE'
-          ? 'border-rose-500/60 shadow-[0_0_20px_rgba(244,63,94,0.12)]'
+          ? 'border-rose-400 ring-1 ring-rose-300'
           : isHighlightedWallTimeframe || wallHighlightType === 'SUPPORT'
-          ? 'border-emerald-500/60 shadow-[0_0_20px_rgba(16,185,129,0.12)]'
-          : 'border-slate-800/90'
+          ? 'border-emerald-500 ring-1 ring-emerald-300'
+          : 'border-slate-200'
       )}
     >
-      {/* Compact Timeframe Header + Polarity Matrix Summary */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 bg-slate-900/75 px-3 py-1.5">
-        <div className="flex items-center gap-2">
-          <span className="inline-flex h-5 items-center rounded bg-slate-800 px-1.5 font-mono text-xs font-bold text-white">
+      {/* Compact Timeframe Header + Setup 1-2-3-4 Status */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-3 py-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="inline-flex h-5 items-center rounded bg-slate-900 px-1.5 font-mono text-xs font-bold text-white">
             {data.timeframe}
           </span>
-          <span className="text-xs font-medium text-slate-300 hidden sm:inline">
+          <span className="text-xs font-semibold text-slate-700 hidden sm:inline">
             {TIMEFRAME_LABELS[data.timeframe]}
           </span>
-          {(isHighlightedWallTimeframe || wallHighlightType) && (
+
+          {data.setup1234.status === 'CONFIRMED' && (
             <Badge
-              variant={
-                wallHighlightType === 'RESISTANCE' ? 'resistance' : 'support'
-              }
-              className="text-[10px] py-0 px-1.5"
+              variant={data.setup1234.isBull ? 'support' : 'resistance'}
+              className="text-[10px] py-0 px-1.5 font-mono"
             >
-              {wallHighlightType === 'RESISTANCE'
-                ? 'RESIST WALL'
-                : 'SUPPORT WALL'}
+              {data.setup1234.isBull ? '● SETUP VERT' : '● SETUP ROUGE'}
             </Badge>
           )}
-          {data.oppositeBandCurvingInwards && (
-            <Badge variant="sky" className="text-[10px] py-0 px-1.5">
-              BB Curving In
+
+          {data.setup1234.status === 'CANDIDATE' && (
+            <Badge
+              variant="amber"
+              className="text-[10px] py-0 px-1.5 font-mono"
+            >
+              ● CANDIDAT ORANGE
             </Badge>
           )}
         </div>
 
         <div className="flex items-center gap-1.5 text-[11px] font-mono">
-          <span className="text-emerald-400 font-semibold" title="Green Support Baselines">
+          <span
+            className="text-emerald-700 font-bold"
+            title="Supports non-transpercés"
+          >
             {greenCount}G
           </span>
-          <span className="text-slate-600">/</span>
-          <span className="text-rose-400 font-semibold" title="Red Resistance Baselines">
+          <span className="text-slate-400">/</span>
+          <span
+            className="text-rose-700 font-bold"
+            title="Résistances non-transpercées"
+          >
             {redCount}R
           </span>
           {onExpand && (
             <button
               type="button"
               onClick={onExpand}
-              className="ml-1.5 rounded border border-slate-700/80 bg-slate-800/70 px-1.5 py-0.5 text-[10px] font-sans text-slate-300 hover:bg-slate-700 hover:text-white"
-              title={isExpanded ? 'Restore 6-pane grid' : 'Expand timeframe'}
+              className="ml-1.5 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-sans font-medium text-slate-700 hover:bg-slate-100"
+              title={isExpanded ? 'Grille 6 graphiques' : 'Agrandir'}
             >
-              {isExpanded ? 'Grid' : 'Focus'}
+              {isExpanded ? 'Grille' : 'Focus'}
             </button>
           )}
         </div>
       </div>
 
-      {/* Synchronized OHLC + Bucket HUD Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 border-b border-slate-900 bg-slate-950 px-3 py-1 text-[11px] font-mono text-slate-400">
+      {/* Synchronized OHLC + M7/M20 HUD Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 border-b border-slate-100 bg-white px-3 py-1 text-[11px] font-mono text-slate-500">
         <div className="flex items-center gap-2 truncate">
-          <span className="text-slate-300 font-semibold">
+          <span className="text-slate-800 font-semibold">
             {hudBar ? hudBar.bucketKey : '—'}
           </span>
           {hudBar && (
             <>
               <span>
-                O:<span className="text-slate-200 ml-0.5">{formatPrice(hudBar.open, category)}</span>
+                O:
+                <span className="text-slate-800 ml-0.5">
+                  {formatPrice(hudBar.open, category)}
+                </span>
               </span>
               <span>
-                H:<span className="text-emerald-400 ml-0.5">{formatPrice(hudBar.high, category)}</span>
+                H:
+                <span className="text-emerald-700 font-medium ml-0.5">
+                  {formatPrice(hudBar.high, category)}
+                </span>
               </span>
               <span>
-                L:<span className="text-rose-400 ml-0.5">{formatPrice(hudBar.low, category)}</span>
+                L:
+                <span className="text-rose-700 font-medium ml-0.5">
+                  {formatPrice(hudBar.low, category)}
+                </span>
               </span>
               <span>
-                C:<span className="text-white font-semibold ml-0.5">{formatPrice(hudBar.close, category)}</span>
+                C:
+                <span className="text-slate-950 font-bold ml-0.5">
+                  {formatPrice(hudBar.close, category)}
+                </span>
               </span>
             </>
           )}
         </div>
 
-        <div className="flex items-center gap-2 text-[10px]">
-          {data.Jack.Jack_0 && (
+        <div className="flex items-center gap-2 text-[10px] font-semibold">
+          {data.latestSMA7 && (
             <span
               className={cn(
-                data.Jack.Jack_0.polarity === 'GREEN'
-                  ? 'text-emerald-400'
-                  : 'text-rose-400'
+                data.latestSMA7.isGreen ? 'text-emerald-700' : 'text-rose-700'
               )}
             >
-              J0:{formatPrice(data.Jack.Jack_0.price, category)}
+              M7:{formatPrice(data.latestSMA7.value, category)}
             </span>
           )}
-          {data.Oggy.Oggy_0 && (
+          {data.latestSMA20 && (
             <span
               className={cn(
-                data.Oggy.Oggy_0.polarity === 'GREEN'
-                  ? 'text-emerald-400'
-                  : 'text-rose-400'
+                data.latestSMA20.isGreen ? 'text-emerald-700' : 'text-rose-700'
               )}
             >
-              O0:{formatPrice(data.Oggy.Oggy_0.price, category)}
+              M20:{formatPrice(data.latestSMA20.value, category)}
             </span>
           )}
         </div>
@@ -570,8 +586,8 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       <div
         ref={containerRef}
         className={cn(
-          'w-full flex-1',
-          isExpanded ? 'min-h-[540px]' : 'min-h-[255px]'
+          'w-full flex-1 bg-white',
+          isExpanded ? 'min-h-[540px]' : 'min-h-[265px]'
         )}
       />
     </div>

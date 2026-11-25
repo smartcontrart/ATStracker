@@ -119,7 +119,7 @@ export class BollingerBandCloudPrimitive implements ISeriesPrimitive<Time> {
   private paneView: BollingerBandPaneView;
   private paneViewsArray: readonly ISeriesPrimitivePaneView[];
 
-  constructor(fillColor = 'rgba(56, 189, 248, 0.09)') {
+  constructor(fillColor = 'rgba(254, 249, 195, 0.72)') {
     this.fillColor = fillColor;
     this.paneView = new BollingerBandPaneView(this);
     this.paneViewsArray = [this.paneView];

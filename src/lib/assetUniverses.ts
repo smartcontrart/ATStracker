@@ -1,7 +1,151 @@
 import type { AssetCategory } from '../types/ats.ts';
 
 /**
- * Complete S&P 500 Equities Universe (~503 constituents, Yahoo Finance format: BRK-B, BF-B).
+ * 14 Curated AT.S / ProRealTime Thematic Stock Lists matching the user's 14 .itf sector files.
+ */
+export const THEMATIC_STOCK_LISTS: Record<
+  string,
+  { id: string; label: string; description: string; tickers: string[] }
+> = {
+  thematic_uranium: {
+    id: 'thematic_uranium',
+    label: '☢️ Uranium',
+    description: 'Mineurs et cycle du combustible uranium (URANIUM.itf)',
+    tickers: [
+      'CCJ', 'UEC', 'NXE', 'DNN', 'UUUU', 'LEU', 'URG', 'EU', 'UROY',
+      'URA', 'URNM', 'BWXT', 'NNE',
+    ],
+  },
+  thematic_rare_earths: {
+    id: 'thematic_rare_earths',
+    label: '⛏️ Terres Rares',
+    description: 'Terres rares, lithium et métaux critiques (TERRES_RARES.itf)',
+    tickers: [
+      'MP', 'ALB', 'SQM', 'LAC', 'SGML', 'USAR', 'NB', 'TMRC',
+      'FCX', 'SCCO', 'AA', 'ERO', 'REMX',
+    ],
+  },
+  thematic_space: {
+    id: 'thematic_space',
+    label: '🚀 Spatial',
+    description: 'Lanceurs, satellites et infrastructures spatiales (SPATIAL.itf)',
+    tickers: [
+      'RKLB', 'ASTS', 'LUNR', 'RDW', 'PL', 'BKSY', 'SPIR', 'IRDM',
+      'VSAT', 'GSAT', 'SATS', 'KTOS', 'LHX', 'LMT', 'NOC', 'RTX',
+    ],
+  },
+  thematic_semis: {
+    id: 'thematic_semis',
+    label: '🔬 Semi-Conducteurs',
+    description: 'Fondeurs, équipementiers et puces IA (SEMI-CONDUCTEURS.itf)',
+    tickers: [
+      'NVDA', 'AVGO', 'TSM', 'AMD', 'ASML', 'AMAT', 'LRCX', 'KLAC',
+      'MU', 'ARM', 'MRVL', 'QCOM', 'TXN', 'ADI', 'NXPI', 'MPWR',
+      'ON', 'MCHP', 'TER', 'SNPS', 'CDNS', 'STM', 'INTC', 'ONTO', 'ENTG',
+    ],
+  },
+  thematic_robotics: {
+    id: 'thematic_robotics',
+    label: '🤖 Robotique',
+    description: 'Robotique chirurgicale, logistique et automatisation (ROBOTIQUE.itf)',
+    tickers: [
+      'ISRG', 'SYM', 'ROK', 'TER', 'ABB', 'CGNX', 'ZBRA', 'SERV',
+      'PATH', 'NOVT', 'EMR', 'HON', 'TSLA', 'AUR', 'OUST', 'BOTZ',
+    ],
+  },
+  thematic_quantum: {
+    id: 'thematic_quantum',
+    label: '⚛️ Quantique',
+    description: 'Calcul quantique et cryptographie post-quantique (QUANTIQUE.itf)',
+    tickers: [
+      'IONQ', 'RGTI', 'QBTS', 'QUBT', 'ARQQ', 'QMCO', 'LAES',
+      'IBM', 'GOOGL', 'HON', 'QTUM',
+    ],
+  },
+  thematic_nuclear: {
+    id: 'thematic_nuclear',
+    label: '⚡ Nucléaire',
+    description: 'Producteurs électronucléaires et ingénierie (NUCLÉAIRE.itf)',
+    tickers: [
+      'CEG', 'VST', 'TLN', 'PEG', 'NEE', 'SO', 'DUK', 'D',
+      'ETR', 'EXC', 'BWXT', 'FLR', 'GEV', 'MIR', 'NLR',
+    ],
+  },
+  thematic_immo_supplies: {
+    id: 'thematic_immo_supplies',
+    label: '🧱 Immo - Fournitures',
+    description: 'Matériaux, équipement et fournitures bâtiment (IMMO_-_FOURNITURES.itf)',
+    tickers: [
+      'HD', 'LOW', 'BLDR', 'SHW', 'MAS', 'FBIN', 'OC', 'MLM', 'VMC',
+      'URI', 'FAST', 'GWW', 'POOL', 'TREX', 'AZEK', 'SSD', 'UFPI',
+      'IBP', 'BLD', 'TT', 'CARR', 'LII', 'WSO', 'SNA', 'SWK', 'MHK', 'FND',
+    ],
+  },
+  thematic_immo_construction: {
+    id: 'thematic_immo_construction',
+    label: '🏗️ Immo - Construction',
+    description: 'Constructeurs résidentiels et infrastructures (IMMO_-_CONSTRUCTION.itf)',
+    tickers: [
+      'DHI', 'LEN', 'PHM', 'NVR', 'TOL', 'KBH', 'TMHC', 'MTH', 'MHO',
+      'LGIH', 'CCS', 'SKY', 'CVCO', 'GRBK', 'DFH', 'TPH', 'PWR',
+      'EME', 'FIX', 'MTZ', 'ACM', 'J', 'ITB', 'XHB',
+    ],
+  },
+  thematic_ai_power: {
+    id: 'thematic_ai_power',
+    label: '🔌 IA - Électricité',
+    description: 'Réseaux électriques, transformateurs et énergie IA (IA_-_ÉLECTRICITÉ.itf)',
+    tickers: [
+      'ETN', 'GEV', 'PWR', 'VRT', 'HUBB', 'NRG', 'VST', 'CEG', 'TLN',
+      'POWL', 'MYRG', 'EME', 'FIX', 'FSLR', 'NXT', 'GNRC', 'BE', 'AES',
+    ],
+  },
+  thematic_ai_smr: {
+    id: 'thematic_ai_smr',
+    label: '🔋 IA - SMR',
+    description: 'Petits réacteurs modulaires nucléaires pour IA (IA_-_SMR.itf)',
+    tickers: [
+      'OKLO', 'SMR', 'NNE', 'BWXT', 'LEU', 'LTBR', 'CCJ', 'GEV', 'FLR', 'MIR',
+    ],
+  },
+  thematic_ai_photonics: {
+    id: 'thematic_ai_photonics',
+    label: '💡 IA - Photonique',
+    description: 'Optique, transceivers et interconnexions IA (IA_-_PHOTONIQUE.itf)',
+    tickers: [
+      'COHR', 'LITE', 'AAOI', 'FN', 'CIEN', 'POET', 'ALAB', 'CRDO',
+      'MTSI', 'MRVL', 'AVGO', 'ANET', 'GLW', 'VIAV', 'SMTC',
+    ],
+  },
+  thematic_ai_datacenter: {
+    id: 'thematic_ai_datacenter',
+    label: '🖥️ IA - Datas Center',
+    description: 'Serveurs, refroidissement, REITs et néoclouds IA (IA_-_DATAS_CENTER.itf)',
+    tickers: [
+      'VRT', 'SMCI', 'DELL', 'HPE', 'ANET', 'EQIX', 'DLR', 'IRM',
+      'APLD', 'CORZ', 'IREN', 'WULF', 'CIFR', 'CLSK', 'HUT', 'MARA',
+      'RIOT', 'NBIS', 'CRWV', 'MOD', 'NTAP', 'PSTG', 'STX', 'WDC',
+    ],
+  },
+  thematic_cyber: {
+    id: 'thematic_cyber',
+    label: '🛡️ Cybersécurité',
+    description: 'Sécurité cloud, réseau, identité et endpoint (CYBERSÉCURITÉ.itf)',
+    tickers: [
+      'PANW', 'CRWD', 'FTNT', 'ZS', 'NET', 'S', 'OKTA', 'CYBR',
+      'CHKP', 'GEN', 'QLYS', 'TENB', 'RPD', 'VRNS', 'RDWR', 'CIBR',
+    ],
+  },
+};
+
+export const ALL_THEMATIC_TICKERS: string[] = Array.from(
+  new Set(
+    Object.values(THEMATIC_STOCK_LISTS).flatMap((sector) => sector.tickers)
+  )
+);
+
+/**
+ * Complete S&P 500 Equities Universe (~502 constituents, Yahoo Finance format).
  */
 export const SP500_TICKERS: readonly string[] = [
   'AAPL', 'NVDA', 'MSFT', 'AMZN', 'META', 'GOOGL', 'GOOG', 'BRK-B', 'AVGO', 'TSLA',
@@ -24,7 +168,7 @@ export const SP500_TICKERS: readonly string[] = [
   'DLR', 'BK', 'KMI', 'NXPI', 'AZO', 'SRE', 'URI', 'JCI', 'AFL', 'SPG',
   'AMP', 'PSX', 'MET', 'ALL', 'CPRT', 'GWW', 'MPC', 'PWR', 'DHI', 'NEM',
   'AEP', 'FICO', 'ROST', 'CMI', 'O', 'LHX', 'VST', 'PAYX', 'D', 'AIG',
-  'HWM', 'KMB', 'FIS', 'MSCI', 'TEL', 'PRU', 'PEG', 'KVUE', 'FAST', 'MPC',
+  'HWM', 'KMB', 'FIS', 'MSCI', 'TEL', 'PRU', 'PEG', 'KVUE', 'FAST',
   'AME', 'PCG', 'ODFL', 'DAL', 'VLO', 'EW', 'COR', 'KR', 'BKR', 'CTVA',
   'TRGP', 'CBRE', 'VRSK', 'AXON', 'OTIS', 'LEN', 'EXC', 'GLW', 'A', 'IR',
   'DFS', 'YUM', 'IT', 'EA', 'MNST', 'CTSH', 'HES', 'XEL', 'SYY', 'ACGL',
@@ -38,9 +182,9 @@ export const SP500_TICKERS: readonly string[] = [
   'BRO', 'VTR', 'SYF', 'TYL', 'HAL', 'GDDY', 'HUBB', 'SW', 'MTD', 'PPL',
   'AEE', 'ADM', 'BIIB', 'FE', 'LYB', 'WY', 'IFF', 'VLTO', 'CINF', 'HBAN',
   'CPAY', 'DVN', 'EQT', 'PTC', 'WST', 'STE', 'NTAP', 'ES', 'TDY', 'RF',
-  'K', 'WAT', 'IX', 'ZBH', 'CCL', 'AWK', 'COO', 'TER', 'CMS', 'ESS',
-  'LDOS', 'STX', 'CBOE', 'PHM', 'TSN', 'PKG', 'BLDR', 'CFG', 'MKC', 'NTRS',
-  'DRI', 'BALL', 'SYF', 'LUV', 'LH', 'GPC', 'EXPE', 'NRG', 'CLX', 'FSLR',
+  'K', 'WAT', 'IX', 'ZBH', 'CCL', 'COO', 'TER', 'CMS', 'ESS',
+  'LDOS', 'STX', 'CBOE', 'TSN', 'PKG', 'BLDR', 'CFG', 'MKC', 'NTRS',
+  'DRI', 'BALL', 'LUV', 'LH', 'GPC', 'EXPE', 'NRG', 'CLX', 'FSLR',
   'STLD', 'MAS', 'OMC', 'INVH', 'SNA', 'J', 'ZBRA', 'WRB', 'ULTA', 'ARE',
   'MAA', 'HOLX', 'TXT', 'DOC', 'BBY', 'PFG', 'EXPD', 'IEX', 'DGX', 'BAX',
   'AVY', 'JBHT', 'TRMB', 'PODD', 'SWKS', 'MOH', 'L', 'DG', 'KIM', 'CF',
@@ -54,15 +198,19 @@ export const SP500_TICKERS: readonly string[] = [
   'WYNN', 'INCY', 'MHK', 'HAS', 'CZR', 'IVZ', 'PARA', 'FMC', 'BWA', 'DVA',
   'SOLV', 'QRVO', 'BEN', 'WBA', 'ETSY', 'MGM', 'NCLH', 'ENPH', 'SMCI', 'COIN',
   'WDAY', 'TPL', 'LII', 'BA', 'SOFI', 'MRNA', 'EL', 'KHC', 'HRL', 'FDS',
-  'WDC', 'DASH', 'PODD', 'COR', 'DECK', 'HUBB', 'BLDR', 'SPY', 'QQQ', 'IWM', 'DIA',
+  'WDC', 'DASH', 'ANF', 'SPY', 'QQQ', 'IWM', 'DIA',
 ];
 
 export const UNIQUE_SP500_TICKERS: string[] = Array.from(new Set(SP500_TICKERS));
 
+export const MASTER_STOCKS_UNIVERSE: string[] = Array.from(
+  new Set([...ALL_THEMATIC_TICKERS, ...UNIQUE_SP500_TICKERS])
+);
+
 export const SP100_TICKERS: string[] = UNIQUE_SP500_TICKERS.slice(0, 100);
 
 /**
- * Top 100 Liquid Cryptocurrencies (USDT pairs on Binance / Hyperliquid, excluding stablecoins).
+ * Top 100 Liquid Cryptocurrencies (USDT pairs on Binance / Hyperliquid).
  */
 export const TOP_100_CRYPTO_TICKERS: string[] = [
   'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
@@ -90,21 +238,16 @@ export const TOP_100_CRYPTO_TICKERS: string[] = [
 export const TOP_25_CRYPTO_TICKERS: string[] = TOP_100_CRYPTO_TICKERS.slice(0, 25);
 
 /**
- * Top 50 USD & Major Global Forex Pairs (Yahoo Finance =X convention).
- * Covers all G10 USD pairs, ~25 EM/Global USD pairs, and major liquid G10 FX crosses.
+ * Top 50 Free-Floating USD & Major Global Forex Pairs (Yahoo Finance =X convention).
  */
 export const TOP_50_FOREX_TICKERS: string[] = [
-  // G10 USD Majors
   'EURUSD=X', 'GBPUSD=X', 'USDJPY=X', 'AUDUSD=X', 'USDCAD=X',
   'USDCHF=X', 'NZDUSD=X', 'USDSEK=X', 'USDNOK=X', 'USDDKK=X',
-  // Asian & APAC USD Pairs
   'USDSGD=X', 'EURSEK=X', 'USDCNH=X', 'USDINR=X', 'USDKRW=X',
   'USDTWD=X', 'USDTHB=X', 'USDIDR=X', 'USDMYR=X', 'USDPHP=X',
-  // LatAm & EMEA USD Pairs
   'USDMXN=X', 'USDBRL=X', 'USDCLP=X', 'USDCOP=X', 'USDPEN=X',
   'USDZAR=X', 'USDTRY=X', 'USDPLN=X', 'USDCZK=X', 'USDHUF=X',
   'USDILS=X', 'USDRON=X', 'EURNOK=X', 'GBPNZD=X',
-  // Major Liquid Crosses
   'EURGBP=X', 'EURJPY=X', 'GBPJPY=X', 'AUDJPY=X', 'CADJPY=X',
   'CHFJPY=X', 'NZDJPY=X', 'EURAUD=X', 'EURCAD=X', 'EURCHF=X',
   'EURNZD=X', 'GBPAUD=X', 'GBPCAD=X', 'GBPCHF=X', 'AUDCAD=X',
@@ -115,62 +258,92 @@ export interface UniversePresetOption {
   id: string;
   label: string;
   description: string;
-  tickers: string[] | null; // null = user's custom localStorage watchlist
+  tickers: string[] | null;
+  group?: 'core' | 'thematic';
 }
 
 export const UNIVERSE_PRESETS: Record<AssetCategory, UniversePresetOption[]> = {
   stocks: [
     {
-      id: 'custom',
-      label: 'My Watchlist',
-      description: 'Custom persistent watchlist in localStorage',
-      tickers: null,
+      id: 'all_combined',
+      label: `All Tracked (${MASTER_STOCKS_UNIVERSE.length})`,
+      description: '14 Listes Thématiques AT.S + S&P 500 complet',
+      tickers: MASTER_STOCKS_UNIVERSE,
+      group: 'core',
     },
     {
-      id: 'sp100',
-      label: 'S&P 100 Mega-Caps (100)',
-      description: 'Top 100 S&P 500 leaders (~8s scan)',
-      tickers: SP100_TICKERS,
+      id: 'thematic_all',
+      label: `14 Thématiques AT.S (${ALL_THEMATIC_TICKERS.length})`,
+      description: 'Toutes les valeurs des 14 listes sectorielles (IA, Uranium, Spatial, Quantique...)',
+      tickers: ALL_THEMATIC_TICKERS,
+      group: 'core',
     },
     {
       id: 'sp500',
-      label: `All S&P 500 (${UNIQUE_SP500_TICKERS.length})`,
-      description: 'Full S&P 500 index streamed in progressive batches',
+      label: `S&P 500 (${UNIQUE_SP500_TICKERS.length})`,
+      description: 'Indice S&P 500 complet',
       tickers: UNIQUE_SP500_TICKERS,
+      group: 'core',
     },
+    {
+      id: 'sp100',
+      label: 'S&P 100 (100)',
+      description: 'Top 100 capitalisations US',
+      tickers: SP100_TICKERS,
+      group: 'core',
+    },
+    {
+      id: 'custom',
+      label: 'Ma Watchlist',
+      description: 'Watchlist personnalisée (localStorage)',
+      tickers: null,
+      group: 'core',
+    },
+    ...Object.values(THEMATIC_STOCK_LISTS).map((sector) => ({
+      id: sector.id,
+      label: `${sector.label} (${sector.tickers.length})`,
+      description: sector.description,
+      tickers: sector.tickers,
+      group: 'thematic' as const,
+    })),
   ],
   crypto: [
     {
-      id: 'custom',
-      label: 'My Watchlist',
-      description: 'Custom persistent watchlist in localStorage',
-      tickers: null,
+      id: 'top100',
+      label: `Top 100 Crypto (${TOP_100_CRYPTO_TICKERS.length})`,
+      description: 'Top 100 paires crypto USDT',
+      tickers: TOP_100_CRYPTO_TICKERS,
+      group: 'core',
     },
     {
       id: 'top25',
       label: 'Top 25 Crypto',
-      description: 'Top 25 liquid crypto pairs (~2s scan)',
+      description: 'Top 25 majors crypto',
       tickers: TOP_25_CRYPTO_TICKERS,
+      group: 'core',
     },
     {
-      id: 'top100',
-      label: `Top 100 Crypto (${TOP_100_CRYPTO_TICKERS.length})`,
-      description: 'Top 100 crypto USDT pairs streamed in batches',
-      tickers: TOP_100_CRYPTO_TICKERS,
+      id: 'custom',
+      label: 'Ma Watchlist',
+      description: 'Watchlist crypto personnalisée',
+      tickers: null,
+      group: 'core',
     },
   ],
   forex: [
     {
-      id: 'custom',
-      label: 'My Watchlist',
-      description: 'Custom persistent FX watchlist in localStorage',
-      tickers: null,
+      id: 'top50',
+      label: `Top 50 FX & USD (${TOP_50_FOREX_TICKERS.length})`,
+      description: '50 paires de devises flottantes USD & G10',
+      tickers: TOP_50_FOREX_TICKERS,
+      group: 'core',
     },
     {
-      id: 'top50',
-      label: `Top 50 USD & FX Pairs (${TOP_50_FOREX_TICKERS.length})`,
-      description: '34 G10/EM USD pairs + 16 major G10 crosses',
-      tickers: TOP_50_FOREX_TICKERS,
+      id: 'custom',
+      label: 'Ma Watchlist',
+      description: 'Watchlist FX personnalisée',
+      tickers: null,
+      group: 'core',
     },
   ],
 };
