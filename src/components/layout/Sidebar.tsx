@@ -78,7 +78,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [activeCategory, screenerResults, watchlists]);
 
   return (
-    <aside className="flex w-full flex-col border-b border-slate-800/90 bg-slate-950/95 lg:w-68 lg:shrink-0 lg:border-b-0 lg:border-r lg:min-h-screen">
+    <aside className="flex w-full flex-col border-b border-slate-800/90 bg-slate-950/95 lg:sticky lg:top-0 lg:h-screen lg:w-64 xl:w-72 lg:shrink-0 lg:border-b-0 lg:border-r">
       {/* Brand Header */}
       <div className="flex items-center justify-between border-b border-slate-800/90 px-4 py-4">
         <div className="flex items-center gap-2.5">
@@ -151,7 +151,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span className="flex items-center gap-1 font-mono text-[11px] text-slate-300">
             <span>{selectedAsset.symbol.replace(/=X$/, '')}</span>
             {selectedAssetScore !== null && (
-              <span className="rounded bg-slate-800 px-1 py-0.2 text-[10px] text-emerald-400 font-bold">
+              <span className="rounded bg-slate-800 px-1 py-0.5 text-[10px] text-emerald-400 font-bold">
                 {selectedAssetScore}%
               </span>
             )}
