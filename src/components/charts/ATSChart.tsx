@@ -1,0 +1,579 @@
+'use client';
+
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  ColorType,
+  CrosshairMode,
+  createChart,
+  type IChartApi,
+  type IPriceLine,
+  type ISeriesApi,
+  LineStyle,
+  type Time,
+} from 'lightweight-charts';
+import { BollingerBandCloudPrimitive } from '@/components/charts/bollingerBandPrimitive';
+import type { CrosshairSyncBus } from '@/components/charts/crosshairSyncBus';
+import { Badge } from '@/components/ui/badge';
+import { flattenTimeframeBaselines } from '@/lib/atsIndicators';
+import { findCorrespondingBarForDate } from '@/lib/dataResampler';
+import { cn, formatPrice } from '@/lib/utils';
+import type { ATSUIPreferences } from '@/store/useATSStore';
+import {
+  type AssetCategory,
+  type OHLCVBar,
+  TIMEFRAME_LABELS,
+  type TimeframeATSData,
+} from '@/types/ats';
+
+export interface ATSChartProps {
+  data: TimeframeATSData;
+  category: AssetCategory;
+  livePrice: number;
+  preferences: ATSUIPreferences;
+  syncBus?: CrosshairSyncBus;
+  isHighlightedWallTimeframe?: boolean;
+  wallHighlightType?: 'SUPPORT' | 'RESISTANCE' | null;
+  onExpand?: () => void;
+  isExpanded?: boolean;
+}
+
+const JACK_SHORT_NAMES: Record<string, string> = {
+  Jack_Minus1: 'Jack -1',
+  Jack_0: 'Jack 0',
+  Jack_Plus1: 'Jack +1',
+};
+
+const OGGY_SHORT_NAMES: Record<string, string> = {
+  Oggy_Minus1: 'Oggy -1',
+  Oggy_0: 'Oggy 0',
+  Oggy_Plus1: 'Oggy +1',
+};
+
+export const ATSChart: React.FC<ATSChartProps> = ({
+  data,
+  category,
+  livePrice,
+  preferences,
+  syncBus,
+  isHighlightedWallTimeframe = false,
+  wallHighlightType = null,
+  onExpand,
+  isExpanded = false,
+}) => {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const bbUpperAreaSeriesRef = useRef<ISeriesApi<'Area'> | null>(null);
+  const bbMidLineSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const bbLowerLineSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const sarSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const bbCloudPrimitiveRef = useRef<BollingerBandCloudPrimitive | null>(null);
+  const priceLinesRef = useRef<IPriceLine[]>([]);
+  const isProgrammaticSyncRef = useRef(false);
+
+  const latestBar =
+    data.bars.length > 0 ? data.bars[data.bars.length - 1] : null;
+  const [hudBar, setHudBar] = useState<OHLCVBar | null>(latestBar);
+
+  useEffect(() => {
+    setHudBar(data.bars.length > 0 ? data.bars[data.bars.length - 1] : null);
+  }, [data.bars]);
+
+  // 1. Initialize Lightweight Chart & Series
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const pricePrecision =
+      category === 'forex' ? 5 : livePrice < 1 ? 5 : livePrice < 10 ? 4 : 2;
+    const minMove = Number((1 / Math.pow(10, pricePrecision)).toFixed(6));
+
+    const chart = createChart(container, {
+      width: container.clientWidth,
+      height: container.clientHeight,
+      layout: {
+        background: { type: ColorType.Solid, color: '#070b14' },
+        textColor: '#94a3b8',
+        fontSize: 11,
+      },
+      grid: {
+        vertLines: { color: 'rgba(30, 41, 59, 0.45)' },
+        horzLines: { color: 'rgba(30, 41, 59, 0.45)' },
+      },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: {
+          color: 'rgba(148, 163, 184, 0.5)',
+          width: 1,
+          style: LineStyle.Dashed,
+          labelBackgroundColor: '#1e293b',
+        },
+        horzLine: {
+          color: 'rgba(148, 163, 184, 0.5)',
+          width: 1,
+          style: LineStyle.Dashed,
+          labelBackgroundColor: '#1e293b',
+        },
+      },
+      rightPriceScale: {
+        borderColor: 'rgba(30, 41, 59, 0.9)',
+        scaleMargins: { top: 0.1, bottom: 0.1 },
+      },
+      timeScale: {
+        borderColor: 'rgba(30, 41, 59, 0.9)',
+        timeVisible: false,
+        rightOffset: 4,
+      },
+    });
+
+    // Bollinger Band Upper as an AreaSeries + custom bounded cloud primitive
+    const bbUpperArea = chart.addAreaSeries({
+      lineColor: 'rgba(56, 189, 248, 0.65)',
+      topColor: 'rgba(56, 189, 248, 0.04)',
+      bottomColor: 'rgba(56, 189, 248, 0.0)',
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+      priceFormat: { type: 'price', precision: pricePrecision, minMove },
+    });
+
+    const bbCloud = new BollingerBandCloudPrimitive('rgba(56, 189, 248, 0.10)');
+    bbUpperArea.attachPrimitive(bbCloud);
+
+    // Bollinger Band Mid (M20)
+    const bbMidLine = chart.addLineSeries({
+      color: 'rgba(125, 211, 252, 0.55)',
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+      priceFormat: { type: 'price', precision: pricePrecision, minMove },
+    });
+
+    // Bollinger Band Lower
+    const bbLowerLine = chart.addLineSeries({
+      color: 'rgba(56, 189, 248, 0.65)',
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+      priceFormat: { type: 'price', precision: pricePrecision, minMove },
+    });
+
+    // Main Candlesticks (OHLC)
+    const candleSeries = chart.addCandlestickSeries({
+      upColor: '#10b981',
+      downColor: '#ef4444',
+      borderUpColor: '#10b981',
+      borderDownColor: '#ef4444',
+      wickUpColor: '#10b981',
+      wickDownColor: '#ef4444',
+      priceFormat: { type: 'price', precision: pricePrecision, minMove },
+    });
+
+    // Parabolic SAR rendered strictly as dots (lineVisible: false, pointMarkersVisible: true)
+    const sarSeries = chart.addLineSeries({
+      color: '#38bdf8',
+      lineVisible: false,
+      pointMarkersVisible: true,
+      pointMarkersRadius: 2.2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+      priceFormat: { type: 'price', precision: pricePrecision, minMove },
+    });
+
+    chartRef.current = chart;
+    candleSeriesRef.current = candleSeries;
+    bbUpperAreaSeriesRef.current = bbUpperArea;
+    bbMidLineSeriesRef.current = bbMidLine;
+    bbLowerLineSeriesRef.current = bbLowerLine;
+    sarSeriesRef.current = sarSeries;
+    bbCloudPrimitiveRef.current = bbCloud;
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          chart.applyOptions({ width, height });
+        }
+      }
+    });
+    resizeObserver.observe(container);
+
+    return () => {
+      resizeObserver.disconnect();
+      priceLinesRef.current = [];
+      chart.remove();
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+    };
+  }, [category]); // Recreate only if category precision model changes
+
+  // 2. Populate Candlestick, Bollinger Band, Parabolic SAR, and Jack/Oggy PriceLines
+  useEffect(() => {
+    const chart = chartRef.current;
+    const candleSeries = candleSeriesRef.current;
+    const bbUpper = bbUpperAreaSeriesRef.current;
+    const bbMid = bbMidLineSeriesRef.current;
+    const bbLower = bbLowerLineSeriesRef.current;
+    const sarSeries = sarSeriesRef.current;
+    const bbCloud = bbCloudPrimitiveRef.current;
+
+    if (!chart || !candleSeries || !bbUpper || !bbMid || !bbLower || !sarSeries) {
+      return;
+    }
+
+    // Set OHLC candlesticks
+    candleSeries.setData(
+      data.bars.map((b) => ({
+        time: b.time as Time,
+        open: b.open,
+        high: b.high,
+        low: b.low,
+        close: b.close,
+      }))
+    );
+
+    // Set Bollinger Bands (20, 2) + Shaded Cloud
+    if (preferences.showBollinger && data.bollingerBands.length > 0) {
+      bbUpper.setData(
+        data.bollingerBands.map((pt) => ({
+          time: pt.time as Time,
+          value: pt.upper,
+        }))
+      );
+      bbMid.setData(
+        data.bollingerBands.map((pt) => ({
+          time: pt.time as Time,
+          value: pt.mid,
+        }))
+      );
+      bbLower.setData(
+        data.bollingerBands.map((pt) => ({
+          time: pt.time as Time,
+          value: pt.lower,
+        }))
+      );
+      bbCloud?.setData(data.bollingerBands, true);
+    } else {
+      bbUpper.setData([]);
+      bbMid.setData([]);
+      bbLower.setData([]);
+      bbCloud?.setData([], false);
+    }
+
+    // Set Parabolic SAR Dots (colored by bullish/bearish polarity & gold on exact Flip)
+    if (preferences.showSAR && data.parabolicSAR.length > 0) {
+      sarSeries.setData(
+        data.parabolicSAR.map((pt) => ({
+          time: pt.time as Time,
+          value: pt.value,
+          color: pt.isFlip
+            ? '#facc15'
+            : pt.isBullish
+            ? '#22c55e'
+            : '#f43f5e',
+        }))
+      );
+    } else {
+      sarSeries.setData([]);
+    }
+
+    // Remove previous Jack/Oggy/Didi price lines cleanly
+    for (const pl of priceLinesRef.current) {
+      try {
+        candleSeries.removePriceLine(pl);
+      } catch {
+        // Ignore stale reference
+      }
+    }
+    priceLinesRef.current = [];
+
+    // Draw ATS Jack (-1, 0, +1) horizontal baselines via createPriceLine
+    if (preferences.showJack) {
+      const jackEntries = [
+        data.Jack.Jack_Minus1,
+        data.Jack.Jack_0,
+        data.Jack.Jack_Plus1,
+      ];
+      for (const line of jackEntries) {
+        if (!line) continue;
+        const isZero = line.key === 'Jack_0';
+        const strictColor = line.polarity === 'GREEN' ? '#22c55e' : '#ef4444';
+
+        const created = candleSeries.createPriceLine({
+          price: line.price,
+          color: strictColor,
+          lineWidth: isZero ? 2 : 1,
+          lineStyle: isZero ? LineStyle.Solid : LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: JACK_SHORT_NAMES[line.key] || line.key,
+        });
+        priceLinesRef.current.push(created);
+      }
+    }
+
+    // Draw ATS Oggy (-1, 0, +1) horizontal baselines via createPriceLine
+    if (preferences.showOggy) {
+      const oggyEntries = [
+        data.Oggy.Oggy_Minus1,
+        data.Oggy.Oggy_0,
+        data.Oggy.Oggy_Plus1,
+      ];
+      for (const line of oggyEntries) {
+        if (!line) continue;
+        const isZero = line.key === 'Oggy_0';
+        const strictColor = line.polarity === 'GREEN' ? '#22c55e' : '#ef4444';
+
+        const created = candleSeries.createPriceLine({
+          price: line.price,
+          color: strictColor,
+          lineWidth: isZero ? 2 : 1,
+          lineStyle: isZero ? LineStyle.LargeDashed : LineStyle.Dotted,
+          axisLabelVisible: true,
+          title: OGGY_SHORT_NAMES[line.key] || line.key,
+        });
+        priceLinesRef.current.push(created);
+      }
+    }
+
+    // Optional Didi Upper-BB target marker if Didi originates from BB_Upper
+    if (
+      preferences.showDidi &&
+      data.Didi &&
+      data.Didi.sourceType === 'HTF_BB_Upper'
+    ) {
+      const didiLine = candleSeries.createPriceLine({
+        price: data.Didi.price,
+        color: '#f59e0b',
+        lineWidth: 1,
+        lineStyle: LineStyle.SparseDotted,
+        axisLabelVisible: true,
+        title: 'Didi (BB)',
+      });
+      priceLinesRef.current.push(didiLine);
+    }
+
+    // Show a smart default viewport (~last 90 bars or full series if shorter)
+    const totalBars = data.bars.length;
+    if (totalBars > 0) {
+      const visibleWindow = Math.min(totalBars, data.timeframe === 'D' ? 110 : 65);
+      chart.timeScale().setVisibleLogicalRange({
+        from: Math.max(0, totalBars - visibleWindow),
+        to: totalBars + 4,
+      });
+    }
+  }, [
+    data,
+    preferences.showBollinger,
+    preferences.showSAR,
+    preferences.showJack,
+    preferences.showOggy,
+    preferences.showDidi,
+  ]);
+
+  // 3. Crosshair Synchronization across D, W, M, 3M, 6M, 12M
+  useEffect(() => {
+    const chart = chartRef.current;
+    const candleSeries = candleSeriesRef.current;
+    if (!chart || !candleSeries) return;
+
+    const barMap = new Map<string, OHLCVBar>();
+    for (const b of data.bars) {
+      barMap.set(b.time, b);
+    }
+
+    const handleCrosshairMove = (param: { time?: Time }) => {
+      if (isProgrammaticSyncRef.current) return;
+
+      if (!param.time) {
+        setHudBar(data.bars.length > 0 ? data.bars[data.bars.length - 1] : null);
+        if (preferences.syncCrosshair && syncBus) {
+          syncBus.emit(data.timeframe, null);
+        }
+        return;
+      }
+
+      const dateStr = String(param.time);
+      const matched = barMap.get(dateStr);
+      if (matched) {
+        setHudBar(matched);
+      }
+
+      if (preferences.syncCrosshair && syncBus) {
+        // Use periodEnd on HTF bars so hovering Monthly/Annual maps cleanly to latest day in that period
+        const broadcastDate = matched ? matched.periodEnd : dateStr;
+        syncBus.emit(data.timeframe, broadcastDate);
+      }
+    };
+
+    chart.subscribeCrosshairMove(handleCrosshairMove);
+
+    let unregisterBus: (() => void) | undefined;
+    if (syncBus) {
+      unregisterBus = syncBus.register(data.timeframe, ({ hoveredDate }) => {
+        if (!preferences.syncCrosshair) return;
+
+        isProgrammaticSyncRef.current = true;
+        try {
+          if (!hoveredDate) {
+            chart.clearCrosshairPosition();
+            setHudBar(
+              data.bars.length > 0 ? data.bars[data.bars.length - 1] : null
+            );
+            return;
+          }
+
+          const targetBar = findCorrespondingBarForDate(
+            hoveredDate,
+            data.timeframe,
+            data.bars
+          );
+          if (targetBar) {
+            chart.setCrosshairPosition(
+              targetBar.close,
+              targetBar.time as Time,
+              candleSeries
+            );
+            setHudBar(targetBar);
+          }
+        } finally {
+          isProgrammaticSyncRef.current = false;
+        }
+      });
+    }
+
+    return () => {
+      chart.unsubscribeCrosshairMove(handleCrosshairMove);
+      unregisterBus?.();
+    };
+  }, [data.bars, data.timeframe, preferences.syncCrosshair, syncBus]);
+
+  const allLines = flattenTimeframeBaselines(data.Jack, data.Oggy);
+  const greenCount = allLines.filter((l) => l.polarity === 'GREEN').length;
+  const redCount = allLines.filter((l) => l.polarity === 'RED').length;
+
+  return (
+    <div
+      className={cn(
+        'flex flex-col rounded-xl border bg-slate-950/90 overflow-hidden transition-all',
+        wallHighlightType === 'RESISTANCE'
+          ? 'border-rose-500/60 shadow-[0_0_20px_rgba(244,63,94,0.12)]'
+          : isHighlightedWallTimeframe || wallHighlightType === 'SUPPORT'
+          ? 'border-emerald-500/60 shadow-[0_0_20px_rgba(16,185,129,0.12)]'
+          : 'border-slate-800/90'
+      )}
+    >
+      {/* Compact Timeframe Header + Polarity Matrix Summary */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 bg-slate-900/75 px-3 py-1.5">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex h-5 items-center rounded bg-slate-800 px-1.5 font-mono text-xs font-bold text-white">
+            {data.timeframe}
+          </span>
+          <span className="text-xs font-medium text-slate-300 hidden sm:inline">
+            {TIMEFRAME_LABELS[data.timeframe]}
+          </span>
+          {(isHighlightedWallTimeframe || wallHighlightType) && (
+            <Badge
+              variant={
+                wallHighlightType === 'RESISTANCE' ? 'resistance' : 'support'
+              }
+              className="text-[10px] py-0 px-1.5"
+            >
+              {wallHighlightType === 'RESISTANCE'
+                ? 'RESIST WALL'
+                : 'SUPPORT WALL'}
+            </Badge>
+          )}
+          {data.oppositeBandCurvingInwards && (
+            <Badge variant="sky" className="text-[10px] py-0 px-1.5">
+              BB Curving In
+            </Badge>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1.5 text-[11px] font-mono">
+          <span className="text-emerald-400 font-semibold" title="Green Support Baselines">
+            {greenCount}G
+          </span>
+          <span className="text-slate-600">/</span>
+          <span className="text-rose-400 font-semibold" title="Red Resistance Baselines">
+            {redCount}R
+          </span>
+          {onExpand && (
+            <button
+              type="button"
+              onClick={onExpand}
+              className="ml-1.5 rounded border border-slate-700/80 bg-slate-800/70 px-1.5 py-0.5 text-[10px] font-sans text-slate-300 hover:bg-slate-700 hover:text-white"
+              title={isExpanded ? 'Restore 6-pane grid' : 'Expand timeframe'}
+            >
+              {isExpanded ? 'Grid' : 'Focus'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Synchronized OHLC + Bucket HUD Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 border-b border-slate-900 bg-slate-950 px-3 py-1 text-[11px] font-mono text-slate-400">
+        <div className="flex items-center gap-2 truncate">
+          <span className="text-slate-300 font-semibold">
+            {hudBar ? hudBar.bucketKey : '—'}
+          </span>
+          {hudBar && (
+            <>
+              <span>
+                O:<span className="text-slate-200 ml-0.5">{formatPrice(hudBar.open, category)}</span>
+              </span>
+              <span>
+                H:<span className="text-emerald-400 ml-0.5">{formatPrice(hudBar.high, category)}</span>
+              </span>
+              <span>
+                L:<span className="text-rose-400 ml-0.5">{formatPrice(hudBar.low, category)}</span>
+              </span>
+              <span>
+                C:<span className="text-white font-semibold ml-0.5">{formatPrice(hudBar.close, category)}</span>
+              </span>
+            </>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 text-[10px]">
+          {data.Jack.Jack_0 && (
+            <span
+              className={cn(
+                data.Jack.Jack_0.polarity === 'GREEN'
+                  ? 'text-emerald-400'
+                  : 'text-rose-400'
+              )}
+            >
+              J0:{formatPrice(data.Jack.Jack_0.price, category)}
+            </span>
+          )}
+          {data.Oggy.Oggy_0 && (
+            <span
+              className={cn(
+                data.Oggy.Oggy_0.polarity === 'GREEN'
+                  ? 'text-emerald-400'
+                  : 'text-rose-400'
+              )}
+            >
+              O0:{formatPrice(data.Oggy.Oggy_0.price, category)}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* TradingView Lightweight Chart Canvas */}
+      <div
+        ref={containerRef}
+        className={cn(
+          'w-full flex-1',
+          isExpanded ? 'min-h-[540px]' : 'min-h-[255px]'
+        )}
+      />
+    </div>
+  );
+};
