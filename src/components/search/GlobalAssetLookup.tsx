@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowUpRight,
   BookmarkPlus,
@@ -304,16 +305,19 @@ export const GlobalAssetLookup: React.FC<GlobalAssetLookupProps> = ({
         </kbd>
       </button>
 
-      {/* Spotlight Modal Overlay */}
-      {isOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-start justify-center bg-black/75 p-4 pt-12 sm:pt-20 backdrop-blur-sm"
-          onClick={() => setIsOpen(false)}
-        >
+      {/* Spotlight Modal Overlay — Portaled to document.body to escape sticky/blur stacking contexts */}
+      {isOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
           <div
-            className="w-full max-w-3xl overflow-hidden rounded-2xl border border-slate-700/90 bg-[#080d19] shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
+            style={{ zIndex: 9999 }}
+            className="fixed inset-0 z-50 flex items-start justify-center bg-black/80 p-4 pt-12 sm:pt-20 backdrop-blur-md"
+            onClick={() => setIsOpen(false)}
           >
+            <div
+              className="relative w-full max-w-3xl overflow-hidden rounded-2xl border border-slate-700 bg-[#080d19] text-slate-100 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
             {/* Search Input Bar */}
             <div className="flex items-center gap-3 border-b border-slate-800 px-4 py-3">
               {searching ? (
@@ -701,7 +705,8 @@ export const GlobalAssetLookup: React.FC<GlobalAssetLookupProps> = ({
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );

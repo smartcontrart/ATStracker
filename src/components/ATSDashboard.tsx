@@ -21,6 +21,7 @@ export const ATSDashboard: React.FC = () => {
     setActiveCategory,
     selectAssetAndNavigate,
     selectedAsset,
+    watchlists,
     screenerResults,
     screenerLoading,
     getActiveSymbolsForCategory,
@@ -135,20 +136,67 @@ export const ATSDashboard: React.FC = () => {
     [router, selectAssetAndNavigate]
   );
 
+  const handleSwitchCategory = useCallback(
+    (nextCategory: AssetCategory) => {
+      setActiveCategory(nextCategory);
+
+      if (activeView === 'charts') {
+        const topScanned = [...screenerResults[nextCategory]].sort(
+          (a, b) => b.confidenceScore - a.confidenceScore
+        )[0];
+        const fallbackSymbol =
+          topScanned?.symbol ||
+          watchlists[nextCategory][0] ||
+          (nextCategory === 'crypto'
+            ? 'BTCUSDT'
+            : nextCategory === 'forex'
+            ? 'EURUSD=X'
+            : 'AAPL');
+
+        selectAssetAndNavigate(fallbackSymbol, nextCategory);
+        const qs = new URLSearchParams({
+          view: 'charts',
+          symbol: fallbackSymbol,
+          category: nextCategory,
+        });
+        router.push(`/?${qs.toString()}`, { scroll: false });
+      } else {
+        const qs = new URLSearchParams({
+          view: 'screener',
+          category: nextCategory,
+        });
+        router.push(`/?${qs.toString()}`, { scroll: false });
+      }
+    },
+    [
+      activeView,
+      router,
+      screenerResults,
+      selectAssetAndNavigate,
+      setActiveCategory,
+      watchlists,
+    ]
+  );
+
   return (
     <div className="flex min-h-screen flex-col bg-[#050810] text-slate-100 lg:flex-row">
       <Sidebar
         onNavigateView={handleNavigateView}
         onSelectAsset={handleSelectCandidate}
+        onSwitchCategory={handleSwitchCategory}
       />
 
       <main className="flex-1 min-w-0 p-4 sm:p-6 overflow-y-auto">
         {activeView === 'screener' ? (
-          <ScreenerView onSelectCandidate={handleSelectCandidate} />
+          <ScreenerView
+            onSelectCandidate={handleSelectCandidate}
+            onSwitchCategory={handleSwitchCategory}
+          />
         ) : (
           <ChartsView
             onBackToScreener={() => handleNavigateView('screener')}
             onChangeTicker={handleSelectCandidate}
+            onSwitchCategory={handleSwitchCategory}
           />
         )}
       </main>

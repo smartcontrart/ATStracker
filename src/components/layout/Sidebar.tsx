@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { GlobalAssetLookup } from '@/components/search/GlobalAssetLookup';
 import { Badge } from '@/components/ui/badge';
+import { MarketToggle } from '@/components/ui/market-toggle';
 import { cn } from '@/lib/utils';
 import { type ActiveDashboardView, useATSStore } from '@/store/useATSStore';
 import type { AssetCategory } from '@/types/ats';
@@ -19,6 +20,7 @@ import type { AssetCategory } from '@/types/ats';
 interface SidebarProps {
   onNavigateView: (view: ActiveDashboardView) => void;
   onSelectAsset: (symbol: string, category: AssetCategory) => void;
+  onSwitchCategory: (category: AssetCategory) => void;
 }
 
 const CATEGORY_HIT_TITLES: Record<AssetCategory, string> = {
@@ -30,6 +32,7 @@ const CATEGORY_HIT_TITLES: Record<AssetCategory, string> = {
 export const Sidebar: React.FC<SidebarProps> = ({
   onNavigateView,
   onSelectAsset,
+  onSwitchCategory,
 }) => {
   const {
     activeView,
@@ -99,8 +102,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Universal Stock / Crypto / FX Lookup Spotlight */}
-      <div className="border-b border-slate-800/80 px-3 py-2.5">
+      {/* Always-Visible 1-Click Market Toggle (Stocks | Crypto | FX) */}
+      <div className="border-b border-slate-800/80 px-3 py-2.5 space-y-2">
+        <MarketToggle
+          value={activeCategory}
+          onChange={onSwitchCategory}
+          size="sm"
+          fullWidth
+        />
         <GlobalAssetLookup onSelectForCharts={onSelectAsset} />
       </div>
 

@@ -22,6 +22,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { MarketToggle } from '@/components/ui/market-toggle';
 import {
   Table,
   TableBody,
@@ -30,7 +31,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { UNIVERSE_PRESETS } from '@/lib/assetUniverses';
 import { cn, formatPrice } from '@/lib/utils';
 import { type DirectionFilter, useATSStore } from '@/store/useATSStore';
@@ -42,6 +42,7 @@ import {
 
 interface ScreenerViewProps {
   onSelectCandidate: (symbol: string, category: AssetCategory) => void;
+  onSwitchCategory: (category: AssetCategory) => void;
 }
 
 const CATEGORY_PLACEHOLDERS: Record<AssetCategory, string> = {
@@ -54,6 +55,7 @@ const BATCH_SIZE = 25;
 
 export const ScreenerView: React.FC<ScreenerViewProps> = ({
   onSelectCandidate,
+  onSwitchCategory,
 }) => {
   const {
     activeCategory,
@@ -301,14 +303,22 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <MarketToggle
+            value={activeCategory}
+            onChange={(cat) => {
+              if (isScanning) stopActiveScan();
+              onSwitchCategory(cat);
+            }}
+          />
+
           <Button
-            variant="default"
+            variant="outline"
             size="sm"
             onClick={() => triggerGlobalAssetLookup()}
           >
-            <Search className="h-3.5 w-3.5" />
-            Lookup Specific Asset (⌘K)
+            <Search className="h-3.5 w-3.5 text-emerald-400" />
+            Lookup Asset (⌘K)
           </Button>
 
           {isScanning ? (
@@ -437,25 +447,13 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
         </Card>
       </div>
 
-      {/* Category Tabs + Universe Preset Selector */}
+      {/* Universe Preset Selector + Custom Ticker Input */}
       <div className="flex flex-col gap-3 rounded-xl border border-slate-800/80 bg-slate-900/40 p-3">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-wrap items-center gap-3">
-            <Tabs
-              value={activeCategory}
-              onValueChange={(val) => {
-                if (isScanning) stopActiveScan();
-                setActiveCategory(val as AssetCategory);
-              }}
-              className="w-auto"
-            >
-              <TabsList>
-                <TabsTrigger value="stocks">Stocks (S&amp;P 500)</TabsTrigger>
-                <TabsTrigger value="crypto">Crypto (Top 100)</TabsTrigger>
-                <TabsTrigger value="forex">Forex &amp; USD (Top 50)</TabsTrigger>
-              </TabsList>
-            </Tabs>
-
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-1">
+              Scan List:
+            </span>
             {/* Universe Size Preset Pills */}
             <div className="flex flex-wrap items-center gap-1.5">
               {presetsForCategory.map((preset) => {

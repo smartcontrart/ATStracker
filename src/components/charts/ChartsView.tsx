@@ -18,6 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { MarketToggle } from '@/components/ui/market-toggle';
 import {
   Table,
   TableBody,
@@ -40,6 +41,7 @@ import {
 interface ChartsViewProps {
   onBackToScreener: () => void;
   onChangeTicker: (symbol: string, category: AssetCategory) => void;
+  onSwitchCategory: (category: AssetCategory) => void;
 }
 
 function renderBaselineCell(line: ATSBaseline | null, category: AssetCategory) {
@@ -69,6 +71,7 @@ function renderBaselineCell(line: ATSBaseline | null, category: AssetCategory) {
 export const ChartsView: React.FC<ChartsViewProps> = ({
   onBackToScreener,
   onChangeTicker,
+  onSwitchCategory,
 }) => {
   const {
     selectedAsset,
@@ -231,6 +234,12 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
               <ArrowLeft className="h-3.5 w-3.5" />
               Screener
             </Button>
+
+            <MarketToggle
+              value={selectedAsset.category}
+              onChange={onSwitchCategory}
+              size="sm"
+            />
 
             {payload ? (
               <div className="flex flex-wrap items-center gap-3">
