@@ -31,12 +31,18 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { UNIVERSE_PRESETS } from '@/lib/assetUniverses';
+import {
+  RUSSELL_2000_FALLBACK_TICKERS,
+  STOXX_600_FALLBACK_TICKERS,
+  UNIQUE_SP500_TICKERS,
+  UNIVERSE_PRESETS,
+} from '@/lib/assetUniverses';
 import { compareScreenerResults, type ScreenerSortKey } from '@/lib/atsScreener';
 import { cn, formatPrice } from '@/lib/utils';
 import {
   type AtsStateFilter,
   type DirectionFilter,
+  type StockIndexFilter,
   useATSStore,
 } from '@/store/useATSStore';
 import {
@@ -120,6 +126,8 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
     setDirectionFilter,
     setStateFilter,
     setSortBy,
+    toggleIndexFilter,
+    clearIndexFilters,
   } = useATSStore();
 
   const [tickerInput, setTickerInput] = useState('');
@@ -346,20 +354,117 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
 
   const activeSort: ScreenerSortKey = uiPreferences.sortBy || 'STATE';
   const activeStateFilter: AtsStateFilter = uiPreferences.stateFilter || 'ALL';
+  const activeIndexFilters: StockIndexFilter[] = useMemo(
+    () => uiPreferences.indexFilters ?? [],
+    [uiPreferences.indexFilters]
+  );
+
+  // Membership sets for instant client-side Index filtering (S&P 500 / STOXX 600 / Russell 2000)
+  const indexMembershipSets = useMemo(() => {
+    const snapUniverses = snapshotCache.stocks?.universes;
+    return {
+      sp500: new Set(
+        snapUniverses?.sp500?.length
+          ? snapUniverses.sp500
+          : UNIQUE_SP500_TICKERS
+      ),
+      stoxx600: new Set(
+        snapUniverses?.stoxx600?.length
+          ? snapUniverses.stoxx600
+          : STOXX_600_FALLBACK_TICKERS
+      ),
+      russell2000: new Set(
+        snapUniverses?.russell2000?.length
+          ? snapUniverses.russell2000
+          : RUSSELL_2000_FALLBACK_TICKERS
+      ),
+    };
+  }, [snapshotCache.stocks?.universes]);
+
+  const matchesIndexFilter = useCallback(
+    (r: ScreenerResult): boolean => {
+      if (activeCategory !== 'stocks' || activeIndexFilters.length === 0) {
+        return true;
+      }
+      return activeIndexFilters.some((idx) => {
+        const set = indexMembershipSets[idx];
+        return set.has(r.symbol) || set.has(r.displaySymbol);
+      });
+    },
+    [activeCategory, activeIndexFilters, indexMembershipSets]
+  );
+
+  // Live active-setup counts per index (for badge counts on the S&P 500 / STOXX 600 / Russell 2000 toggles)
+  const indexActiveCounts = useMemo(() => {
+    const counts = { sp500: 0, stoxx600: 0, russell2000: 0 };
+    if (activeCategory !== 'stocks') return counts;
+    for (const r of rows) {
+      const isAct =
+        r.atsState === 'STEP 1: THE WALL' ||
+        r.atsState === 'STEP 2: REVERSAL CONFIRMED';
+      if (!isAct) continue;
+      if (
+        indexMembershipSets.sp500.has(r.symbol) ||
+        indexMembershipSets.sp500.has(r.displaySymbol)
+      ) {
+        counts.sp500++;
+      }
+      if (
+        indexMembershipSets.stoxx600.has(r.symbol) ||
+        indexMembershipSets.stoxx600.has(r.displaySymbol)
+      ) {
+        counts.stoxx600++;
+      }
+      if (
+        indexMembershipSets.russell2000.has(r.symbol) ||
+        indexMembershipSets.russell2000.has(r.displaySymbol)
+      ) {
+        counts.russell2000++;
+      }
+    }
+    return counts;
+  }, [activeCategory, indexMembershipSets, rows]);
+
+  // Independent Step 1 & Step 2 toggle handlers mapped cleanly to AtsStateFilter
+  const step1Selected =
+    activeStateFilter === 'STEP1' || activeStateFilter === 'ACTIVE';
+  const step2Selected =
+    activeStateFilter === 'STEP2' || activeStateFilter === 'ACTIVE';
+
+  const handleToggleStep1 = () => {
+    if (step1Selected && step2Selected) setStateFilter('STEP2');
+    else if (step1Selected && !step2Selected) setStateFilter('ALL');
+    else if (!step1Selected && step2Selected) setStateFilter('ACTIVE');
+    else setStateFilter('STEP1');
+  };
+
+  const handleToggleStep2 = () => {
+    if (step2Selected && step1Selected) setStateFilter('STEP1');
+    else if (step2Selected && !step1Selected) setStateFilter('ALL');
+    else if (!step2Selected && step1Selected) setStateFilter('ACTIVE');
+    else setStateFilter('STEP2');
+  };
 
   const step2Count = useMemo(
     () =>
-      rows.filter((r) => r.atsState === 'STEP 2: REVERSAL CONFIRMED').length,
-    [rows]
+      rows.filter(
+        (r) =>
+          matchesIndexFilter(r) && r.atsState === 'STEP 2: REVERSAL CONFIRMED'
+      ).length,
+    [matchesIndexFilter, rows]
   );
   const step1Count = useMemo(
-    () => rows.filter((r) => r.atsState === 'STEP 1: THE WALL').length,
-    [rows]
+    () =>
+      rows.filter(
+        (r) => matchesIndexFilter(r) && r.atsState === 'STEP 1: THE WALL'
+      ).length,
+    [matchesIndexFilter, rows]
   );
   const activeBuySellCounts = useMemo(() => {
     let buy = 0;
     let sell = 0;
     for (const r of rows) {
+      if (!matchesIndexFilter(r)) continue;
       if (
         r.atsState === 'STEP 1: THE WALL' ||
         r.atsState === 'STEP 2: REVERSAL CONFIRMED'
@@ -369,28 +474,18 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
       }
     }
     return { buy, sell };
-  }, [rows]);
+  }, [matchesIndexFilter, rows]);
 
   const sortedRows = useMemo(
     () => [...rows].sort((a, b) => compareScreenerResults(a, b, activeSort)),
     [activeSort, rows]
   );
 
-  const topActiveSetups = useMemo(
-    () =>
-      sortedRows
-        .filter(
-          (r) =>
-            r.atsState === 'STEP 2: REVERSAL CONFIRMED' ||
-            r.atsState === 'STEP 1: THE WALL'
-        )
-        .slice(0, 6),
-    [sortedRows]
-  );
-
   const filteredRows = useMemo(() => {
     const query = tableSearch.trim().toUpperCase();
     return sortedRows.filter((r) => {
+      if (!matchesIndexFilter(r)) return false;
+
       if (activeStateFilter === 'ACTIVE') {
         if (
           r.atsState !== 'STEP 1: THE WALL' &&
@@ -438,10 +533,23 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
     });
   }, [
     activeStateFilter,
+    matchesIndexFilter,
     sortedRows,
     tableSearch,
     uiPreferences.directionFilter,
   ]);
+
+  const topActiveSetups = useMemo(
+    () =>
+      filteredRows
+        .filter(
+          (r) =>
+            r.atsState === 'STEP 2: REVERSAL CONFIRMED' ||
+            r.atsState === 'STEP 1: THE WALL'
+        )
+        .slice(0, 6),
+    [filteredRows]
+  );
 
   const displayedRows = filteredRows.slice(0, visibleLimit);
   const progressPct =
@@ -773,37 +881,141 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
           </div>
         )}
 
-        {/* State Filters + Direction Filters + Sorting Controls + Search */}
+        {/* Index Filter Toggles (Stocks) + Step 1 / Step 2 Toggles + Direction + Sort + Search */}
         <div className="flex flex-col gap-2.5 border-t border-slate-200 pt-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex flex-wrap items-center gap-2">
-            {/* State Filter Pills */}
-            <div className="inline-flex flex-wrap items-center rounded-lg border border-slate-200 bg-slate-100 p-0.5">
-              {(
-                [
-                  { id: 'ALL', label: 'All States' },
-                  { id: 'ACTIVE', label: 'Active (Step 1 & 2)' },
-                  { id: 'STEP2', label: 'Step 2 Confirmed' },
-                  { id: 'STEP1', label: 'Step 1 Wall' },
-                  { id: 'INVALIDATED', label: 'Invalidated' },
-                ] as Array<{ id: AtsStateFilter; label: string }>
-              ).map((stOpt) => {
-                const active = activeStateFilter === stOpt.id;
-                return (
-                  <button
-                    key={stOpt.id}
-                    type="button"
-                    onClick={() => setStateFilter(stOpt.id)}
-                    className={cn(
-                      'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
-                      active
-                        ? 'bg-white text-slate-900 shadow-sm font-semibold'
-                        : 'text-slate-600 hover:text-slate-900'
-                    )}
-                  >
-                    {stOpt.label}
-                  </button>
-                );
-              })}
+            {/* Index Filter Toggles (Instant client-side filter without rescanning) */}
+            {activeCategory === 'stocks' && (
+              <div className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-slate-100 p-0.5">
+                <span className="px-2 text-[11px] font-semibold text-slate-500">
+                  Index:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => clearIndexFilters()}
+                  className={cn(
+                    'rounded-md px-2 py-1 text-xs font-medium transition-colors',
+                    activeIndexFilters.length === 0
+                      ? 'bg-slate-900 text-white shadow-sm font-semibold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  )}
+                >
+                  All
+                </button>
+                {(
+                  [
+                    {
+                      id: 'sp500',
+                      label: 'S&P 500',
+                      count: indexActiveCounts.sp500,
+                    },
+                    {
+                      id: 'stoxx600',
+                      label: '🇪🇺 STOXX 600',
+                      count: indexActiveCounts.stoxx600,
+                    },
+                    {
+                      id: 'russell2000',
+                      label: '🇺🇸 Russell 2000',
+                      count: indexActiveCounts.russell2000,
+                    },
+                  ] as Array<{
+                    id: StockIndexFilter;
+                    label: string;
+                    count: number;
+                  }>
+                ).map((idxOpt) => {
+                  const isOn = activeIndexFilters.includes(idxOpt.id);
+                  return (
+                    <button
+                      key={idxOpt.id}
+                      type="button"
+                      onClick={() => toggleIndexFilter(idxOpt.id)}
+                      className={cn(
+                        'inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors',
+                        isOn
+                          ? 'bg-sky-600 text-white shadow-sm font-semibold'
+                          : 'bg-white/70 text-slate-700 hover:bg-white hover:text-slate-950'
+                      )}
+                    >
+                      <span>{idxOpt.label}</span>
+                      <span
+                        className={cn(
+                          'rounded px-1 font-mono text-[10px] font-bold',
+                          isOn
+                            ? 'bg-sky-800/70 text-white'
+                            : 'bg-slate-200/80 text-slate-600'
+                        )}
+                      >
+                        {idxOpt.count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Dedicated Step 1 & Step 2 Independent Toggles */}
+            <div className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-slate-100 p-0.5">
+              <span className="px-2 text-[11px] font-semibold text-slate-500">
+                Setup:
+              </span>
+              <button
+                type="button"
+                onClick={() => setStateFilter('ALL')}
+                className={cn(
+                  'rounded-md px-2 py-1 text-xs font-medium transition-colors',
+                  activeStateFilter === 'ALL'
+                    ? 'bg-slate-900 text-white shadow-sm font-semibold'
+                    : 'text-slate-600 hover:text-slate-900'
+                )}
+              >
+                All
+              </button>
+              <button
+                type="button"
+                onClick={handleToggleStep1}
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-semibold transition-colors',
+                  step1Selected
+                    ? 'bg-amber-500 text-white shadow-sm'
+                    : 'bg-white/70 text-slate-700 hover:bg-white hover:text-slate-950'
+                )}
+              >
+                <span>{step1Selected ? '✓ ' : ''}Step 1</span>
+                <span
+                  className={cn(
+                    'rounded px-1 font-mono text-[10px] font-bold',
+                    step1Selected
+                      ? 'bg-amber-700/60 text-white'
+                      : 'bg-amber-100 text-amber-800'
+                  )}
+                >
+                  {step1Count}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={handleToggleStep2}
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-semibold transition-colors',
+                  step2Selected
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'bg-white/70 text-slate-700 hover:bg-white hover:text-slate-950'
+                )}
+              >
+                <span>{step2Selected ? '✓ ' : ''}Step 2</span>
+                <span
+                  className={cn(
+                    'rounded px-1 font-mono text-[10px] font-bold',
+                    step2Selected
+                      ? 'bg-emerald-800/60 text-white'
+                      : 'bg-emerald-100 text-emerald-800'
+                  )}
+                >
+                  {step2Count}
+                </span>
+              </button>
             </div>
 
             {/* Buy / Sell Direction Filter */}

@@ -8,6 +8,7 @@ import type { AssetCategory, ScreenerResult } from '@/types/ats';
 
 export type ActiveDashboardView = 'screener' | 'charts';
 export type DirectionFilter = 'ALL' | 'LONG' | 'SHORT';
+export type StockIndexFilter = 'sp500' | 'stoxx600' | 'russell2000';
 export type AtsStateFilter =
   | 'ALL'
   | 'ACTIVE'
@@ -26,6 +27,7 @@ export interface ATSUIPreferences {
   directionFilter: DirectionFilter;
   stateFilter: AtsStateFilter;
   sortBy: ScreenerSortKey;
+  indexFilters: StockIndexFilter[];
 }
 
 export interface ScanProgressState {
@@ -119,7 +121,7 @@ function sortScreenerRows(rows: ScreenerResult[]): ScreenerResult[] {
 
 type BooleanPreferenceKey = Exclude<
   keyof ATSUIPreferences,
-  'directionFilter' | 'stateFilter' | 'sortBy'
+  'directionFilter' | 'stateFilter' | 'sortBy' | 'indexFilters'
 >;
 
 interface ATSStoreState {
@@ -159,6 +161,8 @@ interface ATSStoreState {
   setDirectionFilter: (dir: DirectionFilter) => void;
   setStateFilter: (filter: AtsStateFilter) => void;
   setSortBy: (sortKey: ScreenerSortKey) => void;
+  toggleIndexFilter: (index: StockIndexFilter) => void;
+  clearIndexFilters: () => void;
 
   startCategoryScan: (
     category: AssetCategory,
@@ -201,6 +205,7 @@ export const useATSStore = create<ATSStoreState>()(
         directionFilter: 'ALL',
         stateFilter: 'ALL',
         sortBy: 'STATE',
+        indexFilters: [],
       },
 
       screenerResults: {
@@ -471,6 +476,29 @@ export const useATSStore = create<ATSStoreState>()(
           uiPreferences: {
             ...state.uiPreferences,
             sortBy,
+          },
+        })),
+
+      toggleIndexFilter: (index) =>
+        set((state) => {
+          const current = state.uiPreferences.indexFilters ?? [];
+          const exists = current.includes(index);
+          const next = exists
+            ? current.filter((i) => i !== index)
+            : [...current, index];
+          return {
+            uiPreferences: {
+              ...state.uiPreferences,
+              indexFilters: next,
+            },
+          };
+        }),
+
+      clearIndexFilters: () =>
+        set((state) => ({
+          uiPreferences: {
+            ...state.uiPreferences,
+            indexFilters: [],
           },
         })),
 
