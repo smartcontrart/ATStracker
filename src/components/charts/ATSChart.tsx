@@ -252,35 +252,49 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       }))
     );
 
-    // Bollinger Bands + M20 + M7 colored Green (#16a34a) or Red (#dc2626)
+    // Bollinger Bands + M20 + M7 colored Green (#16a34a) or Red (#dc2626).
+    // NOTE: Lightweight Charts strokes segment (i -> i+1) using items[i]'s color,
+    // so items[i] MUST carry the slope color of (i -> i+1) (stored on arr[i+1]).
     if (preferences.showBollinger && data.bollingerBands.length > 0) {
       bbUpper.setData(
-        data.bollingerBands.map((pt) => ({
-          time: pt.time as Time,
-          value: pt.upper,
-          lineColor: pt.upperGreen ? '#16a34a' : '#dc2626',
-        }))
+        data.bollingerBands.map((pt, i, arr) => {
+          const isGreenSeg = i + 1 < arr.length ? arr[i + 1].upperGreen : pt.upperGreen;
+          return {
+            time: pt.time as Time,
+            value: pt.upper,
+            lineColor: isGreenSeg ? '#16a34a' : '#dc2626',
+          };
+        })
       );
       sma20Line.setData(
-        data.sma20.map((pt) => ({
-          time: pt.time as Time,
-          value: pt.value,
-          color: pt.isGreen ? '#16a34a' : '#dc2626',
-        }))
+        data.sma20.map((pt, i, arr) => {
+          const isGreenSeg = i + 1 < arr.length ? arr[i + 1].isGreen : pt.isGreen;
+          return {
+            time: pt.time as Time,
+            value: pt.value,
+            color: isGreenSeg ? '#16a34a' : '#dc2626',
+          };
+        })
       );
       sma7Line.setData(
-        data.sma7.map((pt) => ({
-          time: pt.time as Time,
-          value: pt.value,
-          color: pt.isGreen ? '#16a34a' : '#dc2626',
-        }))
+        data.sma7.map((pt, i, arr) => {
+          const isGreenSeg = i + 1 < arr.length ? arr[i + 1].isGreen : pt.isGreen;
+          return {
+            time: pt.time as Time,
+            value: pt.value,
+            color: isGreenSeg ? '#16a34a' : '#dc2626',
+          };
+        })
       );
       bbLower.setData(
-        data.bollingerBands.map((pt) => ({
-          time: pt.time as Time,
-          value: pt.lower,
-          color: pt.lowerGreen ? '#16a34a' : '#dc2626',
-        }))
+        data.bollingerBands.map((pt, i, arr) => {
+          const isGreenSeg = i + 1 < arr.length ? arr[i + 1].lowerGreen : pt.lowerGreen;
+          return {
+            time: pt.time as Time,
+            value: pt.lower,
+            color: isGreenSeg ? '#16a34a' : '#dc2626',
+          };
+        })
       );
       bbCloud?.setData(data.bollingerBands, true);
     } else {
