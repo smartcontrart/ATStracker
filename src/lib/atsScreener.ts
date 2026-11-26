@@ -31,6 +31,12 @@ export const CLUSTER_POINTS_BY_TIMEFRAME: Record<Timeframe, number> = {
   '12M': 20,
 };
 
+/**
+ * Knockout tolerance beyond Didi: setup is knocked out (Score = 0) only if
+ * currentPrice exceeds the established Didi level by more than 1%.
+ */
+export const DIDI_KNOCKOUT_TOLERANCE = 0.01;
+
 const SHORT_KEY_LABELS: Record<string, string> = {
   Jack_Minus1: 'Jack-1',
   Jack_0: 'Jack0',
@@ -234,24 +240,24 @@ function evaluateDidiAndKnockout(params: {
       }
     }
 
-    const breachedClusterFloor = livePrice < minClusterPrice * 0.99;
     if (
-      (establishedDidi !== null && livePrice < establishedDidi) ||
-      breachedClusterFloor
+      establishedDidi !== null &&
+      livePrice < establishedDidi * (1 - DIDI_KNOCKOUT_TOLERANCE)
     ) {
-      const koDidi = establishedDidi ?? minClusterPrice * 0.99;
       return {
-        didiStopPrice: koDidi,
-        didiDistancePct: ((Math.abs(livePrice - koDidi) / koDidi) * 100),
+        didiStopPrice: establishedDidi,
+        didiDistancePct:
+          (Math.abs(livePrice - establishedDidi) / establishedDidi) * 100,
         isKnockedOut: true,
         pillar2RiskScore: 0,
       };
     }
 
-    const didiStopPrice = Math.min(...dropBars.map((b) => b.low), livePrice);
+    const didiStopPrice =
+      establishedDidi ?? Math.min(...dropBars.map((b) => b.low), livePrice);
     const didiDistancePct =
       didiStopPrice > 0
-        ? ((livePrice - didiStopPrice) / didiStopPrice) * 100
+        ? (Math.abs(livePrice - didiStopPrice) / didiStopPrice) * 100
         : 0;
 
     const pillar2RiskScore: 0 | 20 | 40 =
@@ -298,23 +304,23 @@ function evaluateDidiAndKnockout(params: {
       }
     }
 
-    const breachedClusterCeiling = livePrice > maxClusterPrice * 1.01;
     if (
-      (establishedDidi !== null && livePrice > establishedDidi) ||
-      breachedClusterCeiling
+      establishedDidi !== null &&
+      livePrice > establishedDidi * (1 + DIDI_KNOCKOUT_TOLERANCE)
     ) {
-      const koDidi = establishedDidi ?? maxClusterPrice * 1.01;
       return {
-        didiStopPrice: koDidi,
-        didiDistancePct: ((Math.abs(koDidi - livePrice) / livePrice) * 100),
+        didiStopPrice: establishedDidi,
+        didiDistancePct:
+          (Math.abs(establishedDidi - livePrice) / livePrice) * 100,
         isKnockedOut: true,
         pillar2RiskScore: 0,
       };
     }
 
-    const didiStopPrice = Math.max(...rallyBars.map((b) => b.high), livePrice);
+    const didiStopPrice =
+      establishedDidi ?? Math.max(...rallyBars.map((b) => b.high), livePrice);
     const didiDistancePct =
-      livePrice > 0 ? ((didiStopPrice - livePrice) / livePrice) * 100 : 0;
+      livePrice > 0 ? (Math.abs(didiStopPrice - livePrice) / livePrice) * 100 : 0;
 
     const pillar2RiskScore: 0 | 20 | 40 =
       didiDistancePct <= 0.5 ? 40 : didiDistancePct <= 1.5 ? 20 : 0;
@@ -655,12 +661,14 @@ export function evaluateATSScreener(params: {
     thesisHeadline = `IGNORE / INVALIDATED — Knockout Rule: Current price (${fmtNum(
       livePrice,
       category
-    )}) breached Didi stop-loss (${fmtNum(didiStopPrice, category)}) → Score = 0`;
+    )}) exceeded Didi (${fmtNum(didiStopPrice, category)}) by >1% (${didiDistancePct.toFixed(
+      2
+    )}%) → Score = 0`;
     reasoningBullets.push(
-      `Knockout Rule Triggered: Price breached Didi (${fmtNum(
+      `Knockout Rule Triggered: Price exceeded Didi (${fmtNum(
         didiStopPrice,
         category
-      )}), immediately invalidating the setup (0/100).`
+      )}) by ${didiDistancePct.toFixed(2)}% (>1% tolerance), invalidating the setup (0/100).`
     );
   } else if (activeClusterLines.length > 0) {
     const clusterSummary = activeClusterLines

@@ -913,10 +913,10 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
 
                           <p className="text-xs text-slate-700 leading-snug">
                             {row.isKnockedOut
-                              ? `Knockout Rule: Price breached Didi (${formatPrice(
+                              ? `Knockout Rule: Exceeded Didi (${formatPrice(
                                   row.didiStopPrice,
                                   row.category
-                                )}) → Score = 0`
+                                )}) by ${row.didiDistancePct.toFixed(2)}% (>1%) → Score = 0`
                               : row.pillar1ClusterScore > 0
                               ? `Cluster ${row.pillar1ClusterScore}/60 + Didi Risk ${row.pillar2RiskScore}/40 (${row.didiDistancePct.toFixed(
                                   2
