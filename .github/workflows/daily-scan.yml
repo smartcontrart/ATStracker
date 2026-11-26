@@ -1,0 +1,77 @@
+name: Daily ATS Market Scan (S&P 500 + STOXX 600 + Russell 2000 + Crypto + FX)
+
+on:
+  schedule:
+    # Monday-Friday at 21:30 UTC (after both European & US market closes)
+    - cron: '30 21 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      categories:
+        description: 'Categories to scan (comma-separated: stocks,crypto,forex)'
+        required: false
+        default: 'stocks,crypto,forex'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ats-daily-scan
+  cancel-in-progress: false
+
+jobs:
+  scan-markets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout main repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fetch previous scan-data snapshot (backup constituents & untouched categories)
+        run: |
+          mkdir -p .prev-scan-data
+          if git fetch origin scan-data --depth=1 2>/dev/null; then
+            git archive FETCH_HEAD | tar -x -C .prev-scan-data || true
+            ls -la .prev-scan-data
+          else
+            echo "No existing scan-data branch yet (first run)."
+          fi
+
+      - name: Run Daily ATS Screener Scan
+        run: |
+          CATEGORIES="${{ github.event.inputs.categories || 'stocks,crypto,forex' }}"
+          node scripts/daily-scan.mts \
+            --out scan-output \
+            --prev .prev-scan-data \
+            --categories "$CATEGORIES" \
+            --concurrency 6
+
+      - name: Preserve untouched category snapshots
+        run: |
+          for f in stocks.json crypto.json forex.json; do
+            if [ ! -f "scan-output/$f" ] && [ -f ".prev-scan-data/$f" ]; then
+              cp ".prev-scan-data/$f" "scan-output/$f"
+            fi
+          done
+          ls -lh scan-output/
+
+      - name: Publish compact JSON snapshots to orphan scan-data branch
+        run: |
+          cd scan-output
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B scan-data
+          git add -A
+          git commit -m "chore(scan-data): daily ATS snapshot $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git push --force origin scan-data

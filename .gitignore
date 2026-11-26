@@ -29,3 +29,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# daily scan temp outputs
+/scan-output/
+/.prev-scan-data/

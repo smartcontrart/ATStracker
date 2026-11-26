@@ -58,6 +58,7 @@ const CATEGORY_PLACEHOLDERS: Record<AssetCategory, string> = {
 };
 
 const BATCH_SIZE = 25;
+const PARALLEL_BATCHES = 3;
 
 function getStateBadgeStyle(
   state: AtsState,
@@ -99,6 +100,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
     universePreset,
     setUniversePreset,
     getActiveSymbolsForCategory,
+    getPresetCount,
     addTicker,
     removeTicker,
     screenerResults,
@@ -106,6 +108,11 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
     scanProgress,
     screenerErrors,
     lastScannedAt,
+    snapshotCache,
+    dataSource,
+    snapshotChecked,
+    loadSnapshot,
+    markSnapshotChecked,
     startCategoryScan,
     appendScreenerBatch,
     finishCategoryScan,
@@ -119,6 +126,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
   const [tableSearch, setTableSearch] = useState('');
   const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
   const [visibleLimit, setVisibleLimit] = useState<number>(60);
+  const [snapshotLoading, setSnapshotLoading] = useState<boolean>(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -131,13 +139,17 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
   }, [activeCategory, finishCategoryScan]);
 
   const runProgressiveUniverseScan = useCallback(
-    async (category: AssetCategory, symbolsList: string[]) => {
+    async (
+      category: AssetCategory,
+      symbolsList: string[],
+      clearExisting = true
+    ) => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
 
       if (symbolsList.length === 0) {
-        startCategoryScan(category, 0, true);
+        startCategoryScan(category, 0, clearExisting);
         finishCategoryScan(category, null);
         return;
       }
@@ -145,46 +157,60 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
       const controller = new AbortController();
       abortControllerRef.current = controller;
 
-      startCategoryScan(category, symbolsList.length, true);
+      startCategoryScan(category, symbolsList.length, clearExisting);
 
       let completed = 0;
       const failedSymbols: string[] = [];
 
+      const chunks: string[][] = [];
+      for (let i = 0; i < symbolsList.length; i += BATCH_SIZE) {
+        chunks.push(symbolsList.slice(i, i + BATCH_SIZE));
+      }
+
       try {
-        for (let i = 0; i < symbolsList.length; i += BATCH_SIZE) {
-          if (controller.signal.aborted) break;
+        let cursor = 0;
+        const worker = async () => {
+          while (cursor < chunks.length) {
+            if (controller.signal.aborted) return;
+            const chunk = chunks[cursor++];
+            const qs = new URLSearchParams({
+              category,
+              symbols: chunk.join(','),
+            });
 
-          const chunk = symbolsList.slice(i, i + BATCH_SIZE);
-          const qs = new URLSearchParams({
-            category,
-            symbols: chunk.join(','),
-          });
+            const res = await fetch(`/api/screener?${qs.toString()}`, {
+              signal: controller.signal,
+            });
 
-          const res = await fetch(`/api/screener?${qs.toString()}`, {
-            signal: controller.signal,
-          });
-
-          if (!res.ok) {
-            const errJson = await res.json().catch(() => ({}));
-            throw new Error(errJson?.error || `Batch HTTP ${res.status}`);
-          }
-
-          const json = await res.json();
-          completed += chunk.length;
-
-          if (Array.isArray(json.errors)) {
-            for (const e of json.errors) {
-              if (e?.symbol) failedSymbols.push(e.symbol);
+            if (!res.ok) {
+              const errJson = await res.json().catch(() => ({}));
+              throw new Error(errJson?.error || `Batch HTTP ${res.status}`);
             }
-          }
 
-          appendScreenerBatch(
-            category,
-            (json.results || []) as ScreenerResult[],
-            Math.min(completed, symbolsList.length),
-            symbolsList.length
-          );
-        }
+            const json = await res.json();
+            completed += chunk.length;
+
+            if (Array.isArray(json.errors)) {
+              for (const e of json.errors) {
+                if (e?.symbol) failedSymbols.push(e.symbol);
+              }
+            }
+
+            appendScreenerBatch(
+              category,
+              (json.results || []) as ScreenerResult[],
+              Math.min(completed, symbolsList.length),
+              symbolsList.length
+            );
+          }
+        };
+
+        await Promise.all(
+          Array.from(
+            { length: Math.min(PARALLEL_BATCHES, chunks.length) },
+            () => worker()
+          )
+        );
 
         if (!controller.signal.aborted) {
           const warnMsg =
@@ -206,15 +232,64 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
     [appendScreenerBatch, finishCategoryScan, startCategoryScan]
   );
 
+  const tryFetchSnapshot = useCallback(
+    async (category: AssetCategory, fresh = false): Promise<boolean> => {
+      setSnapshotLoading(true);
+      try {
+        const qs = new URLSearchParams({ category });
+        if (fresh) qs.set('fresh', '1');
+        const res = await fetch(`/api/snapshot?${qs.toString()}`);
+        if (!res.ok) {
+          markSnapshotChecked(category);
+          return false;
+        }
+        const json = await res.json();
+        if (
+          json?.available &&
+          Array.isArray(json.results) &&
+          json.results.length > 0
+        ) {
+          loadSnapshot(category, {
+            scannedAt: json.scannedAt || new Date().toISOString(),
+            universes: json.universes || {},
+            results: json.results as ScreenerResult[],
+          });
+          return true;
+        }
+        markSnapshotChecked(category);
+        return false;
+      } catch {
+        markSnapshotChecked(category);
+        return false;
+      } finally {
+        setSnapshotLoading(false);
+      }
+    },
+    [loadSnapshot, markSnapshotChecked]
+  );
+
   const currentPresetId = universePreset[activeCategory];
 
   useEffect(() => {
     const existing = screenerResults[activeCategory];
-    const isBusy = screenerLoading[activeCategory];
-    if (existing.length === 0 && !isBusy) {
-      const syms = getActiveSymbolsForCategory(activeCategory);
-      void runProgressiveUniverseScan(activeCategory, syms);
-    }
+    const isBusy = screenerLoading[activeCategory] || snapshotLoading;
+    if (existing.length > 0 || isBusy) return;
+
+    let cancelled = false;
+    (async () => {
+      if (!snapshotChecked[activeCategory] && currentPresetId !== 'custom') {
+        const loaded = await tryFetchSnapshot(activeCategory, false);
+        if (loaded || cancelled) return;
+      }
+      if (!cancelled) {
+        const syms = getActiveSymbolsForCategory(activeCategory);
+        void runProgressiveUniverseScan(activeCategory, syms, true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [
     activeCategory,
     currentPresetId,
@@ -222,6 +297,9 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
     runProgressiveUniverseScan,
     screenerLoading,
     screenerResults,
+    snapshotChecked,
+    snapshotLoading,
+    tryFetchSnapshot,
   ]);
 
   useEffect(() => {
@@ -389,6 +467,14 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
             <Badge variant="support" className="font-mono">
               BB EXIT + HTF S/R
             </Badge>
+            {dataSource[activeCategory] === 'snapshot' && (
+              <Badge
+                variant="outline"
+                className="font-mono text-[10px] border-sky-300 bg-sky-50 text-sky-800"
+              >
+                DAILY SNAPSHOT · INSTANT
+              </Badge>
+            )}
           </div>
           <p className="mt-1 text-xs text-slate-600 sm:text-sm">
             Flags price exiting a Bollinger Band (
@@ -431,17 +517,49 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
               <Square className="h-3.5 w-3.5" />
               Stop Scan
             </Button>
+          ) : rows.length > 120 ? (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                title="Fetch live intraday prices & recalculate ATS scores for the Top 50 ranked setups via the live feed"
+                onClick={() => {
+                  const top50 = sortedRows.slice(0, 50).map((r) => r.symbol);
+                  void runProgressiveUniverseScan(activeCategory, top50, false);
+                }}
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                Live Refresh Top 50
+              </Button>
+              {snapshotCache[activeCategory] && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={snapshotLoading}
+                  title="Reload latest daily post-close GitHub Actions snapshot"
+                  onClick={() => void tryFetchSnapshot(activeCategory, true)}
+                >
+                  <RefreshCw
+                    className={cn(
+                      'h-3.5 w-3.5',
+                      snapshotLoading && 'animate-spin'
+                    )}
+                  />
+                  Reload Snapshot
+                </Button>
+              )}
+            </>
           ) : (
             <Button
               variant="outline"
               size="sm"
               onClick={() => {
                 const syms = getActiveSymbolsForCategory(activeCategory);
-                void runProgressiveUniverseScan(activeCategory, syms);
+                void runProgressiveUniverseScan(activeCategory, syms, true);
               }}
             >
               <RefreshCw className="h-3.5 w-3.5" />
-              Rescan ({getActiveSymbolsForCategory(activeCategory).length})
+              Live Rescan ({getActiveSymbolsForCategory(activeCategory).length})
             </Button>
           )}
         </div>
@@ -573,6 +691,12 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
             <div className="flex flex-wrap items-center gap-1.5">
               {corePresets.map((preset) => {
                 const active = currentPresetId === preset.id;
+                const liveCount = getPresetCount(activeCategory, preset.id);
+                const cleanBaseLabel = preset.label.replace(/\s*\(\d+\)\s*$/, '');
+                const displayLabel =
+                  liveCount !== null && liveCount > 0
+                    ? `${cleanBaseLabel} (${liveCount.toLocaleString()})`
+                    : preset.label;
                 return (
                   <button
                     key={preset.id}
@@ -589,7 +713,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                         : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                     )}
                   >
-                    {preset.label}
+                    {displayLabel}
                   </button>
                 );
               })}

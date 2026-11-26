@@ -33,6 +33,50 @@ export interface ScanProgressState {
   total: number;
 }
 
+export interface SnapshotCacheEntry {
+  scannedAt: string;
+  universes: Record<string, string[]>;
+  results: ScreenerResult[];
+}
+
+function filterSnapshotForPreset(
+  snapshot: SnapshotCacheEntry,
+  category: AssetCategory,
+  presetId: string,
+  watchlist: string[]
+): ScreenerResult[] {
+  if (
+    presetId === 'all_combined' ||
+    presetId === 'top100' ||
+    presetId === 'top50'
+  ) {
+    return sortScreenerRows(snapshot.results);
+  }
+
+  let allowed: Set<string> | null = null;
+  if (presetId === 'custom') {
+    allowed = new Set(watchlist);
+  } else if (
+    snapshot.universes &&
+    Array.isArray(snapshot.universes[presetId]) &&
+    snapshot.universes[presetId].length > 0
+  ) {
+    allowed = new Set(snapshot.universes[presetId]);
+  } else {
+    const presetObj = UNIVERSE_PRESETS[category].find((p) => p.id === presetId);
+    if (presetObj?.tickers) {
+      allowed = new Set(presetObj.tickers);
+    }
+  }
+
+  if (!allowed) return sortScreenerRows(snapshot.results);
+  return sortScreenerRows(
+    snapshot.results.filter(
+      (r) => allowed!.has(r.symbol) || allowed!.has(r.displaySymbol)
+    )
+  );
+}
+
 export const DEFAULT_WATCHLISTS: Record<AssetCategory, string[]> = {
   stocks: [
     'AAPL', 'NVDA', 'MSFT', 'TSLA', 'META', 'AMZN', 'GOOGL', 'AMD',
@@ -94,12 +138,18 @@ interface ATSStoreState {
   scanProgress: Record<AssetCategory, ScanProgressState>;
   screenerErrors: Record<AssetCategory, string | null>;
   lastScannedAt: Record<AssetCategory, string | null>;
+  snapshotCache: Record<AssetCategory, SnapshotCacheEntry | null>;
+  dataSource: Record<AssetCategory, 'snapshot' | 'live' | null>;
+  snapshotChecked: Record<AssetCategory, boolean>;
 
   getActiveSymbolsForCategory: (category: AssetCategory) => string[];
+  getPresetCount: (category: AssetCategory, presetId: string) => number | null;
 
   setActiveView: (view: ActiveDashboardView) => void;
   setActiveCategory: (category: AssetCategory) => void;
   setUniversePreset: (category: AssetCategory, presetId: string) => void;
+  loadSnapshot: (category: AssetCategory, entry: SnapshotCacheEntry) => void;
+  markSnapshotChecked: (category: AssetCategory) => void;
   selectAssetAndNavigate: (symbol: string, category: AssetCategory) => void;
   setSelectedAsset: (symbol: string, category: AssetCategory) => void;
   addTicker: (rawTicker: string, category: AssetCategory) => string | null;
@@ -178,10 +228,41 @@ export const useATSStore = create<ATSStoreState>()(
         crypto: null,
         forex: null,
       },
+      snapshotCache: {
+        stocks: null,
+        crypto: null,
+        forex: null,
+      },
+      dataSource: {
+        stocks: null,
+        crypto: null,
+        forex: null,
+      },
+      snapshotChecked: {
+        stocks: false,
+        crypto: false,
+        forex: false,
+      },
 
       getActiveSymbolsForCategory: (category) => {
         const state = get();
         const presetId = state.universePreset[category];
+        const snap = state.snapshotCache[category];
+        if (snap && presetId !== 'custom') {
+          if (
+            presetId === 'all_combined' ||
+            presetId === 'top100' ||
+            presetId === 'top50'
+          ) {
+            return snap.results.map((r) => r.symbol);
+          }
+          if (
+            snap.universes[presetId] &&
+            snap.universes[presetId].length > 0
+          ) {
+            return snap.universes[presetId];
+          }
+        }
         const presetObj = UNIVERSE_PRESETS[category].find(
           (p) => p.id === presetId
         );
@@ -193,19 +274,119 @@ export const useATSStore = create<ATSStoreState>()(
         );
       },
 
+      getPresetCount: (category, presetId) => {
+        const state = get();
+        const snap = state.snapshotCache[category];
+        if (snap) {
+          if (
+            presetId === 'all_combined' ||
+            presetId === 'top100' ||
+            presetId === 'top50'
+          ) {
+            return snap.results.length;
+          }
+          if (snap.universes[presetId]) {
+            return snap.universes[presetId].length;
+          }
+        }
+        if (presetId === 'custom') return state.watchlists[category].length;
+        const presetObj = UNIVERSE_PRESETS[category].find(
+          (p) => p.id === presetId
+        );
+        return presetObj?.tickers ? presetObj.tickers.length : null;
+      },
+
       setActiveView: (view) => set({ activeView: view }),
 
       setActiveCategory: (category) => set({ activeCategory: category }),
 
       setUniversePreset: (category, presetId) =>
+        set((state) => {
+          const snap = state.snapshotCache[category];
+          if (snap && presetId !== 'custom') {
+            const filtered = filterSnapshotForPreset(
+              snap,
+              category,
+              presetId,
+              state.watchlists[category]
+            );
+            return {
+              universePreset: {
+                ...state.universePreset,
+                [category]: presetId,
+              },
+              screenerResults: {
+                ...state.screenerResults,
+                [category]: filtered,
+              },
+              dataSource: {
+                ...state.dataSource,
+                [category]: 'snapshot',
+              },
+              screenerErrors: {
+                ...state.screenerErrors,
+                [category]: null,
+              },
+            };
+          }
+          return {
+            universePreset: {
+              ...state.universePreset,
+              [category]: presetId,
+            },
+            screenerResults: {
+              ...state.screenerResults,
+              [category]: [],
+            },
+          };
+        }),
+
+      loadSnapshot: (category, entry) =>
+        set((state) => {
+          const presetId = state.universePreset[category];
+          const filtered = filterSnapshotForPreset(
+            entry,
+            category,
+            presetId,
+            state.watchlists[category]
+          );
+          return {
+            snapshotCache: {
+              ...state.snapshotCache,
+              [category]: entry,
+            },
+            snapshotChecked: {
+              ...state.snapshotChecked,
+              [category]: true,
+            },
+            dataSource: {
+              ...state.dataSource,
+              [category]: 'snapshot',
+            },
+            screenerResults: {
+              ...state.screenerResults,
+              [category]: filtered,
+            },
+            screenerLoading: {
+              ...state.screenerLoading,
+              [category]: false,
+            },
+            screenerErrors: {
+              ...state.screenerErrors,
+              [category]: null,
+            },
+            lastScannedAt: {
+              ...state.lastScannedAt,
+              [category]: entry.scannedAt,
+            },
+          };
+        }),
+
+      markSnapshotChecked: (category) =>
         set((state) => ({
-          universePreset: {
-            ...state.universePreset,
-            [category]: presetId,
-          },
-          screenerResults: {
-            ...state.screenerResults,
-            [category]: [],
+          snapshotChecked: {
+            ...state.snapshotChecked,
+            [category]: true,
           },
         })),
 
@@ -328,10 +509,31 @@ export const useATSStore = create<ATSStoreState>()(
           }
           const merged = sortScreenerRows(Array.from(map.values()));
 
+          // Also keep snapshotCache warm with any fresh live intraday updates
+          const existingSnap = state.snapshotCache[category];
+          let nextSnap = existingSnap;
+          if (existingSnap && batchResults.length > 0) {
+            const snapMap = new Map<string, ScreenerResult>();
+            for (const s of existingSnap.results) snapMap.set(s.symbol, s);
+            for (const inc of batchResults) snapMap.set(inc.symbol, inc);
+            nextSnap = {
+              ...existingSnap,
+              results: sortScreenerRows(Array.from(snapMap.values())),
+            };
+          }
+
           return {
             screenerResults: {
               ...state.screenerResults,
               [category]: merged,
+            },
+            snapshotCache: {
+              ...state.snapshotCache,
+              [category]: nextSnap,
+            },
+            dataSource: {
+              ...state.dataSource,
+              [category]: existingSnap ? 'snapshot' : 'live',
             },
             scanProgress: {
               ...state.scanProgress,
@@ -352,10 +554,27 @@ export const useATSStore = create<ATSStoreState>()(
             map.set(existing.symbol, existing);
           }
           map.set(result.symbol, result);
+
+          const existingSnap = state.snapshotCache[cat];
+          let nextSnap = existingSnap;
+          if (existingSnap) {
+            const snapMap = new Map<string, ScreenerResult>();
+            for (const s of existingSnap.results) snapMap.set(s.symbol, s);
+            snapMap.set(result.symbol, result);
+            nextSnap = {
+              ...existingSnap,
+              results: sortScreenerRows(Array.from(snapMap.values())),
+            };
+          }
+
           return {
             screenerResults: {
               ...state.screenerResults,
               [cat]: sortScreenerRows(Array.from(map.values())),
+            },
+            snapshotCache: {
+              ...state.snapshotCache,
+              [cat]: nextSnap,
             },
           };
         }),
