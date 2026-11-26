@@ -1030,7 +1030,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                               {formatPrice(row.stopLoss, row.category)}
                             </span>
                             <span className="text-[10px] text-slate-500">
-                              ({isShort ? '+1% wall' : '-1% wall'})
+                              ({isShort ? '+0.5% wall' : '-0.5% wall'})
                             </span>
                           </div>
 
