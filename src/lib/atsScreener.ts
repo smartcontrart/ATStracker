@@ -39,11 +39,21 @@ const TRIGGER_TIMEFRAMES_DESC: readonly Timeframe[] = [
   'D',
 ] as const;
 
-/** Proximity % tolerance by Higher Timeframe (Monthly/Quarterly/Annual allow wider visual touch) */
+/** Proximity % tolerance by Higher Timeframe (higher TFs have much larger candles, so 4-6% is visually touching) */
 const HTF_SR_PROXIMITY_TOL_BY_TF: Record<Timeframe, number> = {
-  D: 0.015,
-  W: 0.015,
-  M: 0.025,
+  D: 0.02,
+  W: 0.025,
+  M: 0.04,
+  '3M': 0.05,
+  '6M': 0.055,
+  '12M': 0.06,
+};
+
+/** Small AT.S "Autour" touch halo for dynamic curves (MM7, MM20, BB) that still hold their Green/Red slope color */
+const DYNAMIC_CURVE_OVERSHOOT_BY_TF: Record<Timeframe, number> = {
+  D: 0.005,
+  W: 0.01,
+  M: 0.02,
   '3M': 0.03,
   '6M': 0.03,
   '12M': 0.03,
@@ -306,6 +316,7 @@ function findHigherTimeframeSR(params: {
   for (const htf of higherTfs) {
     const htfData = timeframes[htf];
     const proximityTol = HTF_SR_PROXIMITY_TOL_BY_TF[htf];
+    const curveOvershoot = DYNAMIC_CURVE_OVERSHOOT_BY_TF[htf];
 
     // 1. Unbroken Jack & Oggy baselines (strictly excluding pierced lines)
     const unbroken = flattenTimeframeBaselines(htfData.Jack, htfData.Oggy, true);
@@ -343,73 +354,77 @@ function findHigherTimeframeSR(params: {
       }
     }
 
-    // 2. MM7 (SMA 7) — Green/rising for Support (<= livePrice), Red/falling for Resistance (>= livePrice)
+    // 2. MM7 (SMA 7) — Green/rising for Support, Red/falling for Resistance (with HTF "Autour" curve halo)
     if (htfData.latestSMA7 && htfData.latestSMA7.value > 0) {
       const m7 = htfData.latestSMA7.value;
       if (
         side === 'BUY' &&
         htfData.latestSMA7.isGreen &&
-        m7 <= livePrice
+        m7 <= livePrice * (1 + curveOvershoot)
       ) {
-        const dist = (livePrice - m7) / livePrice;
-        if (dist <= proximityTol) {
+        const distLive = Math.abs(livePrice - m7) / livePrice;
+        const distExt = Math.abs(refExtremePrice - m7) / livePrice;
+        if (distLive <= proximityTol || distExt <= proximityTol) {
           matchedLevels.push({
             label: `${htf}-MM7`,
             timeframe: htf,
             kind: 'MM7',
             price: m7,
-            distancePct: dist * 100,
+            distancePct: distLive * 100,
           });
         }
       } else if (
         side === 'SELL' &&
         !htfData.latestSMA7.isGreen &&
-        m7 >= livePrice
+        m7 >= livePrice * (1 - curveOvershoot)
       ) {
-        const dist = (m7 - livePrice) / livePrice;
-        if (dist <= proximityTol) {
+        const distLive = Math.abs(m7 - livePrice) / livePrice;
+        const distExt = Math.abs(m7 - refExtremePrice) / livePrice;
+        if (distLive <= proximityTol || distExt <= proximityTol) {
           matchedLevels.push({
             label: `${htf}-MM7`,
             timeframe: htf,
             kind: 'MM7',
             price: m7,
-            distancePct: dist * 100,
+            distancePct: distLive * 100,
           });
         }
       }
     }
 
-    // 3. MM20 (SMA 20) — Green/rising for Support (<= livePrice), Red/falling for Resistance (>= livePrice)
+    // 3. MM20 (SMA 20) — Green/rising for Support, Red/falling for Resistance (with HTF "Autour" curve halo)
     if (htfData.latestSMA20 && htfData.latestSMA20.value > 0) {
       const m20 = htfData.latestSMA20.value;
       if (
         side === 'BUY' &&
         htfData.latestSMA20.isGreen &&
-        m20 <= livePrice
+        m20 <= livePrice * (1 + curveOvershoot)
       ) {
-        const dist = (livePrice - m20) / livePrice;
-        if (dist <= proximityTol) {
+        const distLive = Math.abs(livePrice - m20) / livePrice;
+        const distExt = Math.abs(refExtremePrice - m20) / livePrice;
+        if (distLive <= proximityTol || distExt <= proximityTol) {
           matchedLevels.push({
             label: `${htf}-MM20`,
             timeframe: htf,
             kind: 'MM20',
             price: m20,
-            distancePct: dist * 100,
+            distancePct: distLive * 100,
           });
         }
       } else if (
         side === 'SELL' &&
         !htfData.latestSMA20.isGreen &&
-        m20 >= livePrice
+        m20 >= livePrice * (1 - curveOvershoot)
       ) {
-        const dist = (m20 - livePrice) / livePrice;
-        if (dist <= proximityTol) {
+        const distLive = Math.abs(m20 - livePrice) / livePrice;
+        const distExt = Math.abs(m20 - refExtremePrice) / livePrice;
+        if (distLive <= proximityTol || distExt <= proximityTol) {
           matchedLevels.push({
             label: `${htf}-MM20`,
             timeframe: htf,
             kind: 'MM20',
             price: m20,
-            distancePct: dist * 100,
+            distancePct: distLive * 100,
           });
         }
       }
@@ -456,13 +471,13 @@ function findHigherTimeframeSR(params: {
       }
     }
 
-    // 5. Higher-Timeframe Bollinger Bands — STRICT color polarity & unbroken side:
-    //    Green (rising, <= livePrice) = Support (BUY only), Red (falling, >= livePrice) = Resistance (SELL only)
+    // 5. Higher-Timeframe Bollinger Bands — STRICT color polarity + HTF "Autour" curve halo:
+    //    Green (rising) = Support (BUY only), Red (falling) = Resistance (SELL only)
     if (htfData.latestBB) {
       const { upper, lower, upperGreen, lowerGreen } = htfData.latestBB;
       if (side === 'BUY') {
-        if (lower > 0 && lowerGreen && lower <= livePrice) {
-          const distLive = (livePrice - lower) / livePrice;
+        if (lower > 0 && lowerGreen && lower <= livePrice * (1 + curveOvershoot)) {
+          const distLive = Math.abs(livePrice - lower) / livePrice;
           const distExt = Math.abs(refExtremePrice - lower) / livePrice;
           if (
             distLive <= proximityTol ||
@@ -477,8 +492,8 @@ function findHigherTimeframeSR(params: {
             });
           }
         }
-        if (upper > 0 && upperGreen && upper <= livePrice) {
-          const distLive = (livePrice - upper) / livePrice;
+        if (upper > 0 && upperGreen && upper <= livePrice * (1 + curveOvershoot)) {
+          const distLive = Math.abs(livePrice - upper) / livePrice;
           const distExt = Math.abs(refExtremePrice - upper) / livePrice;
           if (
             distLive <= proximityTol ||
@@ -494,8 +509,8 @@ function findHigherTimeframeSR(params: {
           }
         }
       } else {
-        if (upper > 0 && !upperGreen && upper >= livePrice) {
-          const distLive = (upper - livePrice) / livePrice;
+        if (upper > 0 && !upperGreen && upper >= livePrice * (1 - curveOvershoot)) {
+          const distLive = Math.abs(upper - livePrice) / livePrice;
           const distExt = Math.abs(upper - refExtremePrice) / livePrice;
           if (
             distLive <= proximityTol ||
@@ -510,8 +525,8 @@ function findHigherTimeframeSR(params: {
             });
           }
         }
-        if (lower > 0 && !lowerGreen && lower >= livePrice) {
-          const distLive = (lower - livePrice) / livePrice;
+        if (lower > 0 && !lowerGreen && lower >= livePrice * (1 - curveOvershoot)) {
+          const distLive = Math.abs(lower - livePrice) / livePrice;
           const distExt = Math.abs(lower - refExtremePrice) / livePrice;
           if (
             distLive <= proximityTol ||
