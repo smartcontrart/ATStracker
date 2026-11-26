@@ -995,18 +995,31 @@ function populateSetup1234Signals(
           }
         }
 
-        // 4. HTF Bollinger Lower / Upper Band (strict slope: lowerGreen for Bull, !upperGreen for Bear)
+        // 4. HTF Bollinger Bands — strict color polarity: Green = Support, Red = Resistance
         if (htfData.latestBB) {
           if (
             htfData.latestBB.lowerGreen &&
             isNearBull(htfData.latestBB.lower)
           ) {
             bullHits.push(`${htf}-BBLow`);
-          } else if (
+          }
+          if (
+            htfData.latestBB.upperGreen &&
+            isNearBull(htfData.latestBB.upper)
+          ) {
+            bullHits.push(`${htf}-BBHigh`);
+          }
+          if (
             !htfData.latestBB.upperGreen &&
             isNearBear(htfData.latestBB.upper)
           ) {
             bearHits.push(`${htf}-BBHigh`);
+          }
+          if (
+            !htfData.latestBB.lowerGreen &&
+            isNearBear(htfData.latestBB.lower)
+          ) {
+            bearHits.push(`${htf}-BBLow`);
           }
         }
       }

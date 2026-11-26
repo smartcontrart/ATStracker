@@ -409,7 +409,7 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
               <div className="grid grid-cols-2 gap-2 font-mono text-xs">
                 <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
                   <div className="text-[10px] uppercase tracking-wider text-slate-400">
-                    HTF S/R Levels (SAR/MM/J/O)
+                    HTF S/R Levels (BB/SAR/MM/J/O)
                   </div>
                   <div className="mt-0.5 font-bold text-slate-900">
                     {payload.screener.ClusterDensityCount}{' '}

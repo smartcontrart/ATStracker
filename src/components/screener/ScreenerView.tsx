@@ -397,7 +397,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
             <span className="text-rose-700 font-semibold">Top = Sell</span>)
             into a strictly higher-timeframe{' '}
             <span className="font-semibold text-slate-800">
-              SAR, MM7, MM20, Jack, or Oggy
+              BB (Green=Sup / Red=Res), SAR, MM7, MM20, Jack, or Oggy
             </span>{' '}
             level. Ranked highest timeframe first (
             <span className="font-mono text-slate-800">
@@ -871,7 +871,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                   onClick={() => setSortBy('CLUSTER')}
                   className="inline-flex items-center gap-1 font-semibold hover:text-slate-950"
                 >
-                  HTF S/R Levels (SAR/MM/Jack/Oggy)
+                  HTF S/R Levels (BB/SAR/MM/Jack/Oggy)
                   {activeSort === 'CLUSTER' && <span>↓</span>}
                 </button>
               </TableHead>

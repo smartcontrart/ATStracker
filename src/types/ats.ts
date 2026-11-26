@@ -230,7 +230,7 @@ export interface TimeframeHorizonSummary {
   m20Price: number | null;
 }
 
-export type HTFLevelKind = 'SAR' | 'MM7' | 'MM20' | 'Jack' | 'Oggy';
+export type HTFLevelKind = 'BB' | 'SAR' | 'MM7' | 'MM20' | 'Jack' | 'Oggy';
 
 export interface MatchedHTFLevel {
   label: string;

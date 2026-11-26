@@ -361,6 +361,79 @@ function findHigherTimeframeSR(params: {
         }
       }
     }
+
+    // 5. Higher-Timeframe Bollinger Bands — STRICT color polarity:
+    //    Green (rising) = Support (BUY only), Red (falling) = Resistance (SELL only)
+    if (htfData.latestBB) {
+      const { upper, lower, upperGreen, lowerGreen } = htfData.latestBB;
+      if (side === 'BUY') {
+        if (lower > 0 && lowerGreen && lower <= livePrice * 1.005) {
+          const distLive = Math.abs(livePrice - lower) / livePrice;
+          const distExt = Math.abs(refExtremePrice - lower) / livePrice;
+          if (
+            distLive <= HTF_SR_PROXIMITY_TOL ||
+            distExt <= HTF_SR_PROXIMITY_TOL
+          ) {
+            matchedLevels.push({
+              label: `${htf}-BB Low`,
+              timeframe: htf,
+              kind: 'BB',
+              price: lower,
+              distancePct: distLive * 100,
+            });
+          }
+        }
+        if (upper > 0 && upperGreen && upper <= livePrice * 1.005) {
+          const distLive = Math.abs(livePrice - upper) / livePrice;
+          const distExt = Math.abs(refExtremePrice - upper) / livePrice;
+          if (
+            distLive <= HTF_SR_PROXIMITY_TOL ||
+            distExt <= HTF_SR_PROXIMITY_TOL
+          ) {
+            matchedLevels.push({
+              label: `${htf}-BB Up`,
+              timeframe: htf,
+              kind: 'BB',
+              price: upper,
+              distancePct: distLive * 100,
+            });
+          }
+        }
+      } else {
+        if (upper > 0 && !upperGreen && upper >= livePrice * 0.995) {
+          const distLive = Math.abs(upper - livePrice) / livePrice;
+          const distExt = Math.abs(upper - refExtremePrice) / livePrice;
+          if (
+            distLive <= HTF_SR_PROXIMITY_TOL ||
+            distExt <= HTF_SR_PROXIMITY_TOL
+          ) {
+            matchedLevels.push({
+              label: `${htf}-BB Up`,
+              timeframe: htf,
+              kind: 'BB',
+              price: upper,
+              distancePct: distLive * 100,
+            });
+          }
+        }
+        if (lower > 0 && !lowerGreen && lower >= livePrice * 0.995) {
+          const distLive = Math.abs(lower - livePrice) / livePrice;
+          const distExt = Math.abs(lower - refExtremePrice) / livePrice;
+          if (
+            distLive <= HTF_SR_PROXIMITY_TOL ||
+            distExt <= HTF_SR_PROXIMITY_TOL
+          ) {
+            matchedLevels.push({
+              label: `${htf}-BB Low`,
+              timeframe: htf,
+              kind: 'BB',
+              price: lower,
+              distancePct: distLive * 100,
+            });
+          }
+        }
+      }
+    }
   }
 
   // Sort matched levels by highest timeframe first, then closest to livePrice
