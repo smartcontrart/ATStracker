@@ -302,6 +302,21 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
                   </span>
                 </div>
 
+                {payload.screener.setupConfidenceScore > 0 && (
+                  <span
+                    className={cn(
+                      'inline-flex items-center rounded px-2 py-0.5 font-mono text-xs font-extrabold text-white',
+                      payload.screener.setupConfidenceScore >= 75
+                        ? 'bg-emerald-600'
+                        : payload.screener.setupConfidenceScore >= 50
+                        ? 'bg-amber-500'
+                        : 'bg-slate-700'
+                    )}
+                  >
+                    Score {payload.screener.setupConfidenceScore}/100
+                  </span>
+                )}
+
                 {payload.screener.bbExitTimeframe &&
                   payload.screener.highestHtfTimeframe && (
                     <span
@@ -406,22 +421,42 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 font-mono text-xs">
+              <div className="grid grid-cols-3 gap-2 font-mono text-xs">
                 <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
                   <div className="text-[10px] uppercase tracking-wider text-slate-400">
-                    HTF S/R Levels (BB/SAR/MM/J/O)
+                    Confidence Score
+                  </div>
+                  <div className="mt-0.5 font-bold text-slate-900">
+                    {payload.screener.setupConfidenceScore}/100
+                  </div>
+                  {payload.screener.scoreBreakdown && (
+                    <div className="text-[9px] text-slate-500">
+                      TF {payload.screener.scoreBreakdown.timeframePts} · S/R{' '}
+                      {payload.screener.scoreBreakdown.srCountPts} · Didi{' '}
+                      {payload.screener.scoreBreakdown.earlinessPts}
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-400">
+                    Backing S/R Count
                   </div>
                   <div className="mt-0.5 font-bold text-slate-900">
                     {payload.screener.ClusterDensityCount}{' '}
-                    {payload.screener.ClusterDensityCount === 1
-                      ? 'Matched Level'
-                      : 'Matched Levels'}
+                    {isShortSetup
+                      ? payload.screener.ClusterDensityCount === 1
+                        ? 'Resistance'
+                        : 'Resistances'
+                      : payload.screener.ClusterDensityCount === 1
+                      ? 'Support'
+                      : 'Supports'}
                   </div>
                 </div>
 
                 <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
                   <div className="text-[10px] uppercase tracking-wider text-slate-400">
-                    Risk to Didi
+                    Earliness (Didi)
                   </div>
                   <div className="mt-0.5 font-bold text-rose-700">
                     {payload.screener.RiskToDidi.toFixed(2)}%{' '}

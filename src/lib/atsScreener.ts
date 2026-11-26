@@ -11,6 +11,7 @@ import type {
   ScreenerResult,
   SetupConfirmationStatus,
   SetupDirection,
+  SetupScoreBreakdown,
   Timeframe,
   TimeframeATSData,
   TimeframeHorizonSummary,
@@ -38,8 +39,92 @@ const TRIGGER_TIMEFRAMES_DESC: readonly Timeframe[] = [
   'D',
 ] as const;
 
-/** Maximum proximity % to a Higher-Timeframe Support/Resistance (SAR, MM7, MM20, Jack, Oggy) */
-const HTF_SR_PROXIMITY_TOL = 0.015; // 1.5%
+/** Proximity % tolerance by Higher Timeframe (Monthly/Quarterly/Annual allow wider visual touch) */
+const HTF_SR_PROXIMITY_TOL_BY_TF: Record<Timeframe, number> = {
+  D: 0.015,
+  W: 0.015,
+  M: 0.025,
+  '3M': 0.03,
+  '6M': 0.03,
+  '12M': 0.03,
+};
+
+const TRIGGER_TF_SCORE: Record<Timeframe, number> = {
+  D: 4,
+  W: 9,
+  M: 14,
+  '3M': 18,
+  '6M': 22,
+  '12M': 22,
+};
+
+const HTF_SR_TF_SCORE: Record<Timeframe, number> = {
+  D: 2,
+  W: 4,
+  M: 8,
+  '3M': 12,
+  '6M': 15,
+  '12M': 18,
+};
+
+/**
+ * 0-100 Setup Confidence Score combining:
+ * - Pillar 1 (0-40): Timeframe Power (BB-exit Trigger TF + Highest S/R TF)
+ * - Pillar 2 (0-35): Number of Higher-TF Supports/Resistances backing the setup (+ Multi-HTF bonus)
+ * - Pillar 3 (0-25): Earliness / Proximity to Didi (closer to Didi = earlier = higher score)
+ */
+export function computeSetupConfidenceScore(params: {
+  triggerTf: Timeframe;
+  matchedLevels: MatchedHTFLevel[];
+  riskToDidiPct: number;
+}): { score: number; breakdown: SetupScoreBreakdown } {
+  const { triggerTf, matchedLevels, riskToDidiPct } = params;
+  if (matchedLevels.length === 0) {
+    return {
+      score: 0,
+      breakdown: {
+        timeframePts: 0,
+        srCountPts: 0,
+        earlinessPts: 0,
+        distinctHtfCount: 0,
+      },
+    };
+  }
+
+  // Pillar 1: Timeframe Power (max 40)
+  const highestHtf = matchedLevels[0].timeframe;
+  const timeframePts = Math.min(
+    40,
+    TRIGGER_TF_SCORE[triggerTf] + HTF_SR_TF_SCORE[highestHtf]
+  );
+
+  // Pillar 2: Number of Supports/Resistances + Multi-HTF Confluence (max 35)
+  const count = matchedLevels.length;
+  const distinctHtfCount = new Set(matchedLevels.map((l) => l.timeframe)).size;
+  const baseCountPts =
+    count >= 4 ? 32 : count === 3 ? 27 : count === 2 ? 20 : 10;
+  const multiHtfBonus = distinctHtfCount >= 2 ? 3 : 0;
+  const srCountPts = Math.min(35, baseCountPts + multiHtfBonus);
+
+  // Pillar 3: Earliness / Proximity to Didi (max 25)
+  let earlinessPts = 2;
+  if (riskToDidiPct <= 0.5) earlinessPts = 25;
+  else if (riskToDidiPct <= 1.0) earlinessPts = 21;
+  else if (riskToDidiPct <= 2.0) earlinessPts = 16;
+  else if (riskToDidiPct <= 3.5) earlinessPts = 11;
+  else if (riskToDidiPct <= 5.5) earlinessPts = 6;
+
+  const score = Math.min(100, timeframePts + srCountPts + earlinessPts);
+  return {
+    score,
+    breakdown: {
+      timeframePts,
+      srCountPts,
+      earlinessPts,
+      distinctHtfCount,
+    },
+  };
+}
 
 export const ATS_STATE_SORT_PRIORITY: Record<AtsState, number> = {
   'STEP 2: REVERSAL CONFIRMED': 3,
@@ -84,17 +169,20 @@ export function compareScreenerResults(
     return b.setupHierarchyRank - a.setupHierarchyRank;
   }
 
-  // Default: Active setups first -> Highest Timeframe Hierarchy Rank -> Cluster Density -> Tightest Risk to Didi
+  // Default ('STATE'): Active setups first -> Highest Confidence Score (0-100) -> S/R Count -> Higher TF Rank -> Tightest Risk to Didi
   if (aActive !== bActive) return aActive ? -1 : 1;
+  if (b.setupConfidenceScore !== a.setupConfidenceScore) {
+    return b.setupConfidenceScore - a.setupConfidenceScore;
+  }
+  if (b.ClusterDensityCount !== a.ClusterDensityCount) {
+    return b.ClusterDensityCount - a.ClusterDensityCount;
+  }
   if (b.setupHierarchyRank !== a.setupHierarchyRank) {
     return b.setupHierarchyRank - a.setupHierarchyRank;
   }
   const stateDiff =
     ATS_STATE_SORT_PRIORITY[b.atsState] - ATS_STATE_SORT_PRIORITY[a.atsState];
   if (stateDiff !== 0) return stateDiff;
-  if (b.ClusterDensityCount !== a.ClusterDensityCount) {
-    return b.ClusterDensityCount - a.ClusterDensityCount;
-  }
   return a.RiskToDidi - b.RiskToDidi;
 }
 
@@ -217,6 +305,7 @@ function findHigherTimeframeSR(params: {
 
   for (const htf of higherTfs) {
     const htfData = timeframes[htf];
+    const proximityTol = HTF_SR_PROXIMITY_TOL_BY_TF[htf];
 
     // 1. Unbroken Jack & Oggy baselines (strictly excluding pierced lines)
     const unbroken = flattenTimeframeBaselines(htfData.Jack, htfData.Oggy, true);
@@ -225,7 +314,7 @@ function findHigherTimeframeSR(params: {
         if (line.polarity === 'GREEN' && line.price <= livePrice) {
           const distLive = (livePrice - line.price) / livePrice;
           const distExt = Math.abs(refExtremePrice - line.price) / livePrice;
-          if (distLive <= HTF_SR_PROXIMITY_TOL || distExt <= HTF_SR_PROXIMITY_TOL) {
+          if (distLive <= proximityTol || distExt <= proximityTol) {
             matchedLevels.push({
               label: line.label,
               timeframe: htf,
@@ -240,7 +329,7 @@ function findHigherTimeframeSR(params: {
         if (line.polarity === 'RED' && line.price >= livePrice) {
           const distLive = (line.price - livePrice) / livePrice;
           const distExt = Math.abs(line.price - refExtremePrice) / livePrice;
-          if (distLive <= HTF_SR_PROXIMITY_TOL || distExt <= HTF_SR_PROXIMITY_TOL) {
+          if (distLive <= proximityTol || distExt <= proximityTol) {
             matchedLevels.push({
               label: line.label,
               timeframe: htf,
@@ -263,7 +352,7 @@ function findHigherTimeframeSR(params: {
         m7 <= livePrice
       ) {
         const dist = (livePrice - m7) / livePrice;
-        if (dist <= HTF_SR_PROXIMITY_TOL) {
+        if (dist <= proximityTol) {
           matchedLevels.push({
             label: `${htf}-MM7`,
             timeframe: htf,
@@ -278,7 +367,7 @@ function findHigherTimeframeSR(params: {
         m7 >= livePrice
       ) {
         const dist = (m7 - livePrice) / livePrice;
-        if (dist <= HTF_SR_PROXIMITY_TOL) {
+        if (dist <= proximityTol) {
           matchedLevels.push({
             label: `${htf}-MM7`,
             timeframe: htf,
@@ -299,7 +388,7 @@ function findHigherTimeframeSR(params: {
         m20 <= livePrice
       ) {
         const dist = (livePrice - m20) / livePrice;
-        if (dist <= HTF_SR_PROXIMITY_TOL) {
+        if (dist <= proximityTol) {
           matchedLevels.push({
             label: `${htf}-MM20`,
             timeframe: htf,
@@ -314,7 +403,7 @@ function findHigherTimeframeSR(params: {
         m20 >= livePrice
       ) {
         const dist = (m20 - livePrice) / livePrice;
-        if (dist <= HTF_SR_PROXIMITY_TOL) {
+        if (dist <= proximityTol) {
           matchedLevels.push({
             label: `${htf}-MM20`,
             timeframe: htf,
@@ -339,7 +428,7 @@ function findHigherTimeframeSR(params: {
         (!htfLastBar || htfLastBar.low >= sar)
       ) {
         const dist = (livePrice - sar) / livePrice;
-        if (dist <= HTF_SR_PROXIMITY_TOL) {
+        if (dist <= proximityTol) {
           matchedLevels.push({
             label: `${htf}-SAR`,
             timeframe: htf,
@@ -355,7 +444,7 @@ function findHigherTimeframeSR(params: {
         (!htfLastBar || htfLastBar.high <= sar)
       ) {
         const dist = (sar - livePrice) / livePrice;
-        if (dist <= HTF_SR_PROXIMITY_TOL) {
+        if (dist <= proximityTol) {
           matchedLevels.push({
             label: `${htf}-SAR`,
             timeframe: htf,
@@ -376,8 +465,8 @@ function findHigherTimeframeSR(params: {
           const distLive = (livePrice - lower) / livePrice;
           const distExt = Math.abs(refExtremePrice - lower) / livePrice;
           if (
-            distLive <= HTF_SR_PROXIMITY_TOL ||
-            distExt <= HTF_SR_PROXIMITY_TOL
+            distLive <= proximityTol ||
+            distExt <= proximityTol
           ) {
             matchedLevels.push({
               label: `${htf}-BB Low`,
@@ -392,8 +481,8 @@ function findHigherTimeframeSR(params: {
           const distLive = (livePrice - upper) / livePrice;
           const distExt = Math.abs(refExtremePrice - upper) / livePrice;
           if (
-            distLive <= HTF_SR_PROXIMITY_TOL ||
-            distExt <= HTF_SR_PROXIMITY_TOL
+            distLive <= proximityTol ||
+            distExt <= proximityTol
           ) {
             matchedLevels.push({
               label: `${htf}-BB Up`,
@@ -409,8 +498,8 @@ function findHigherTimeframeSR(params: {
           const distLive = (upper - livePrice) / livePrice;
           const distExt = Math.abs(upper - refExtremePrice) / livePrice;
           if (
-            distLive <= HTF_SR_PROXIMITY_TOL ||
-            distExt <= HTF_SR_PROXIMITY_TOL
+            distLive <= proximityTol ||
+            distExt <= proximityTol
           ) {
             matchedLevels.push({
               label: `${htf}-BB Up`,
@@ -425,8 +514,8 @@ function findHigherTimeframeSR(params: {
           const distLive = (lower - livePrice) / livePrice;
           const distExt = Math.abs(lower - refExtremePrice) / livePrice;
           if (
-            distLive <= HTF_SR_PROXIMITY_TOL ||
-            distExt <= HTF_SR_PROXIMITY_TOL
+            distLive <= proximityTol ||
+            distExt <= proximityTol
           ) {
             matchedLevels.push({
               label: `${htf}-BB Low`,
@@ -472,6 +561,8 @@ export function detectAtsSetup(assetData: {
     side: 'BUY' | 'SELL';
     highestHtf: Timeframe;
     rank: number;
+    score: number;
+    scoreBreakdown: SetupScoreBreakdown;
     matchedLevels: MatchedHTFLevel[];
     matchedBaselines: ATSBaseline[];
     didiPrice: number;
@@ -543,12 +634,24 @@ export function detectAtsSetup(assetData: {
             : Math.max(0, ((didiPrice - livePrice) / livePrice) * 100)
           : 0;
 
-      if (!bestMatch || rank > bestMatch.rank) {
+      const { score, breakdown } = computeSetupConfidenceScore({
+        triggerTf,
+        matchedLevels,
+        riskToDidiPct,
+      });
+
+      if (
+        !bestMatch ||
+        score > bestMatch.score ||
+        (score === bestMatch.score && rank > bestMatch.rank)
+      ) {
         bestMatch = {
           triggerTf,
           side,
           highestHtf,
           rank,
+          score,
+          scoreBreakdown: breakdown,
           matchedLevels,
           matchedBaselines,
           didiPrice,
@@ -575,6 +678,13 @@ export function detectAtsSetup(assetData: {
       bbExitTimeframe: null,
       highestHtfTimeframe: null,
       setupHierarchyRank: 0,
+      setupConfidenceScore: 0,
+      scoreBreakdown: {
+        timeframePts: 0,
+        srCountPts: 0,
+        earlinessPts: 0,
+        distinctHtfCount: 0,
+      },
       matchedHtfLevels: [],
       ClusterDensityCount: 0,
       RiskToDidiPercentage: fallbackRisk,
@@ -601,6 +711,8 @@ export function detectAtsSetup(assetData: {
     bbExitTimeframe: bestMatch.triggerTf,
     highestHtfTimeframe: bestMatch.highestHtf,
     setupHierarchyRank: bestMatch.rank,
+    setupConfidenceScore: bestMatch.score,
+    scoreBreakdown: bestMatch.scoreBreakdown,
     matchedHtfLevels: bestMatch.matchedLevels,
     ClusterDensityCount: bestMatch.matchedLevels.length,
     RiskToDidiPercentage: bestMatch.riskToDidiPct,
@@ -795,6 +907,13 @@ export function evaluateATSScreener(params: {
       } > ${detection.bbExitTimeframe}): ${levelList}.`
     );
     reasoningBullets.push(
+      `Confidence Score: ${detection.setupConfidenceScore}/100 (Timeframes: ${detection.scoreBreakdown.timeframePts}/40 · S/R Count: ${detection.scoreBreakdown.srCountPts}/35 [${detection.ClusterDensityCount} level${
+        detection.ClusterDensityCount > 1 ? 's' : ''
+      } across ${detection.scoreBreakdown.distinctHtfCount} HTF${
+        detection.scoreBreakdown.distinctHtfCount > 1 ? 's' : ''
+      }] · Earliness to Didi: ${detection.scoreBreakdown.earlinessPts}/25).`
+    );
+    reasoningBullets.push(
       `Didi Stop-Loss: ${fmtNum(
         detection.didiPrice,
         category
@@ -820,6 +939,8 @@ export function evaluateATSScreener(params: {
     bbExitTimeframe: detection.bbExitTimeframe,
     highestHtfTimeframe: detection.highestHtfTimeframe,
     setupHierarchyRank: detection.setupHierarchyRank,
+    setupConfidenceScore: detection.setupConfidenceScore,
+    scoreBreakdown: detection.scoreBreakdown,
     matchedHtfLevels: detection.matchedHtfLevels,
     direction,
     signalStatus,

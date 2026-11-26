@@ -26,7 +26,8 @@ function shortStateTag(
   state: AtsState | null,
   density: number,
   bbExitTf?: Timeframe | null,
-  highestHtf?: Timeframe | null
+  highestHtf?: Timeframe | null,
+  score?: number
 ): string {
   if (!state) return '—';
   if (
@@ -34,10 +35,11 @@ function shortStateTag(
     bbExitTf &&
     highestHtf
   ) {
-    return `${bbExitTf}→${highestHtf}`;
+    const scorePart = typeof score === 'number' && score > 0 ? `${score} · ` : '';
+    return `${scorePart}${density}SR ${bbExitTf}→${highestHtf}`;
   }
-  if (state === 'STEP 2: REVERSAL CONFIRMED') return `S2 · ${density}L`;
-  if (state === 'STEP 1: THE WALL') return `S1 · ${density}L`;
+  if (state === 'STEP 2: REVERSAL CONFIRMED') return `S2 · ${density}SR`;
+  if (state === 'STEP 1: THE WALL') return `S1 · ${density}SR`;
   if (state === 'INVALIDATED') return 'INVAL';
   return 'NONE';
 }
@@ -98,6 +100,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         wallLabel: r.activeWallLabel,
         bbExitTimeframe: r.bbExitTimeframe,
         highestHtfTimeframe: r.highestHtfTimeframe,
+        score: r.setupConfidenceScore ?? 0,
       }));
     }
     return watchlists[activeCategory].slice(0, 20).map((sym) => ({
@@ -110,6 +113,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       wallLabel: '',
       bbExitTimeframe: null as Timeframe | null,
       highestHtfTimeframe: null as Timeframe | null,
+      score: 0,
     }));
   }, [activeCategory, screenerResults, uiPreferences.sortBy, watchlists]);
 
@@ -278,7 +282,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       item.atsState,
                       item.density,
                       item.bbExitTimeframe,
-                      item.highestHtfTimeframe
+                      item.highestHtfTimeframe,
+                      item.score
                     )}
                   </span>
                 ) : screenerLoading[activeCategory] ? (

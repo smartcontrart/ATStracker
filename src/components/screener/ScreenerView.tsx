@@ -395,15 +395,15 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
             <span className="text-emerald-700 font-semibold">Bottom = Buy</span>{' '}
             /{' '}
             <span className="text-rose-700 font-semibold">Top = Sell</span>)
-            into a strictly higher-timeframe{' '}
+            into strictly higher-timeframe{' '}
             <span className="font-semibold text-slate-800">
               BB (Green=Sup / Red=Res), SAR, MM7, MM20, Jack, or Oggy
             </span>{' '}
-            level. Ranked highest timeframe first (
-            <span className="font-mono text-slate-800">
-              6M→12M &gt; 3M→6M/12M &gt; M→3M &gt; W→M &gt; D→W
+            levels. Ranked by{' '}
+            <span className="font-mono font-semibold text-slate-900">
+              Confidence Score (0–100)
             </span>
-            ).
+            : Timeframes (40) + S/R Count (35) + Earliness to Didi (25).
           </p>
         </div>
 
@@ -719,9 +719,9 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
               </span>
               {(
                 [
-                  { id: 'STATE', label: 'Higher TF ↓' },
-                  { id: 'CLUSTER', label: 'S/R Levels ↓' },
-                  { id: 'RISK', label: 'Risk to Didi ↑' },
+                  { id: 'STATE', label: 'Score ↓' },
+                  { id: 'CLUSTER', label: 'S/R Count ↓' },
+                  { id: 'RISK', label: 'Earliest (Didi) ↑' },
                 ] as Array<{ id: ScreenerSortKey; label: string }>
               ).map((sOpt) => {
                 const active = activeSort === sOpt.id;
@@ -792,16 +792,31 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                       : 'border-amber-300 bg-amber-50/40 hover:border-amber-500'
                   )}
                 >
-                  <div className="flex items-center justify-between gap-2 w-full">
+                  <div className="flex items-center justify-between gap-1.5 w-full">
                     <span className="font-mono text-sm font-bold text-slate-900 truncate">
                       {hit.displaySymbol}
                     </span>
-                    <Badge
-                      variant={isSell ? 'resistance' : 'support'}
-                      className="text-[9px] px-1.5 py-0 font-mono"
-                    >
-                      {hit.setupSide}
-                    </Badge>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span
+                        title={`Score ${hit.setupConfidenceScore}/100 (TF ${hit.scoreBreakdown?.timeframePts ?? 0}/40 · S/R ${hit.scoreBreakdown?.srCountPts ?? 0}/35 · Didi ${hit.scoreBreakdown?.earlinessPts ?? 0}/25)`}
+                        className={cn(
+                          'rounded px-1.5 py-0.5 font-mono text-[10px] font-extrabold',
+                          hit.setupConfidenceScore >= 75
+                            ? 'bg-emerald-600 text-white'
+                            : hit.setupConfidenceScore >= 50
+                            ? 'bg-amber-500 text-white'
+                            : 'bg-slate-700 text-white'
+                        )}
+                      >
+                        {hit.setupConfidenceScore}/100
+                      </span>
+                      <Badge
+                        variant={isSell ? 'resistance' : 'support'}
+                        className="text-[9px] px-1.5 py-0 font-mono"
+                      >
+                        {hit.setupSide}
+                      </Badge>
+                    </div>
                   </div>
 
                   <div className="mt-2 flex flex-wrap items-center gap-1">
@@ -834,9 +849,15 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                   )}
 
                   <div className="mt-2 flex items-center justify-between font-mono text-[11px] text-slate-700 w-full">
-                    <span className="font-bold">
+                    <span className="font-bold text-slate-900">
                       {hit.ClusterDensityCount}{' '}
-                      {hit.ClusterDensityCount === 1 ? 'Level' : 'Levels'}
+                      {isSell
+                        ? hit.ClusterDensityCount === 1
+                          ? 'Res'
+                          : 'Res'
+                        : hit.ClusterDensityCount === 1
+                        ? 'Sup'
+                        : 'Sups'}
                     </span>
                     <span className="text-rose-700 font-semibold">
                       Didi {hit.RiskToDidi.toFixed(2)}%
@@ -861,7 +882,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                   onClick={() => setSortBy('STATE')}
                   className="inline-flex items-center gap-1 font-semibold hover:text-slate-950"
                 >
-                  BB Exit → HTF S/R
+                  Score &amp; BB Exit → HTF
                   {activeSort === 'STATE' && <span>↓</span>}
                 </button>
               </TableHead>
@@ -871,7 +892,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                   onClick={() => setSortBy('CLUSTER')}
                   className="inline-flex items-center gap-1 font-semibold hover:text-slate-950"
                 >
-                  HTF S/R Levels (BB/SAR/MM/Jack/Oggy)
+                  S/R Count &amp; Levels (BB/SAR/MM/J/O)
                   {activeSort === 'CLUSTER' && <span>↓</span>}
                 </button>
               </TableHead>
@@ -980,10 +1001,25 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                         </div>
                       </TableCell>
 
-                      {/* 2. Prominent BB Exit -> HTF S/R State Column */}
-                      <TableCell className="align-top max-w-[300px]">
+                      {/* 2. Prominent Score + BB Exit -> HTF S/R Column */}
+                      <TableCell className="align-top max-w-[310px]">
                         <div className="space-y-1">
                           <div className="flex flex-wrap items-center gap-1.5">
+                            {isActive && (
+                              <span
+                                title={`Score ${row.setupConfidenceScore}/100 — Timeframes: ${row.scoreBreakdown?.timeframePts ?? 0}/40 · S/R Count: ${row.scoreBreakdown?.srCountPts ?? 0}/35 · Earliness (Didi): ${row.scoreBreakdown?.earlinessPts ?? 0}/25`}
+                                className={cn(
+                                  'inline-flex items-center rounded px-2 py-0.5 font-mono text-xs font-extrabold text-white',
+                                  row.setupConfidenceScore >= 75
+                                    ? 'bg-emerald-600'
+                                    : row.setupConfidenceScore >= 50
+                                    ? 'bg-amber-500'
+                                    : 'bg-slate-700'
+                                )}
+                              >
+                                {row.setupConfidenceScore}/100
+                              </span>
+                            )}
                             {isActive &&
                               row.bbExitTimeframe &&
                               row.highestHtfTimeframe && (
@@ -998,13 +1034,22 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                                   {isSell ? 'RES' : 'SUP'}
                                 </span>
                               )}
-                            <Badge
-                              variant={badgeInfo.variant}
-                              className="font-mono text-[10px] font-bold px-1.5 py-0.5"
-                            >
-                              {row.atsState}
-                            </Badge>
+                            {!isActive && (
+                              <Badge
+                                variant={badgeInfo.variant}
+                                className="font-mono text-[10px] font-bold px-1.5 py-0.5"
+                              >
+                                {row.atsState}
+                              </Badge>
+                            )}
                           </div>
+                          {isActive && row.scoreBreakdown && (
+                            <div className="text-[10px] font-mono text-slate-500">
+                              TF {row.scoreBreakdown.timeframePts}/40 · S/R{' '}
+                              {row.scoreBreakdown.srCountPts}/35 · Didi{' '}
+                              {row.scoreBreakdown.earlinessPts}/25
+                            </div>
+                          )}
                           <p className="text-xs text-slate-700 leading-snug line-clamp-2">
                             {row.thesisHeadline}
                           </p>
@@ -1018,7 +1063,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                             <span
                               className={cn(
                                 'inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-extrabold',
-                                row.ClusterDensityCount >= 3
+                                row.ClusterDensityCount >= 2
                                   ? 'border-emerald-400 bg-emerald-100 text-emerald-900'
                                   : row.ClusterDensityCount >= 1
                                   ? 'border-sky-300 bg-sky-50 text-sky-900'
@@ -1026,9 +1071,13 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                               )}
                             >
                               {row.ClusterDensityCount}{' '}
-                              {row.ClusterDensityCount === 1
-                                ? 'Level'
-                                : 'Levels'}
+                              {isSell
+                                ? row.ClusterDensityCount === 1
+                                  ? 'Resistance'
+                                  : 'Resistances'
+                                : row.ClusterDensityCount === 1
+                                ? 'Support'
+                                : 'Supports'}
                             </span>
                           </div>
                           {row.matchedHtfLevels &&

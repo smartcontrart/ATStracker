@@ -240,6 +240,17 @@ export interface MatchedHTFLevel {
   distancePct: number;
 }
 
+export interface SetupScoreBreakdown {
+  /** Pillar 1 (0-40): BB-exit Trigger TF + Highest S/R TF */
+  timeframePts: number;
+  /** Pillar 2 (0-35): Number of HTF Supports/Resistances + Multi-HTF breadth */
+  srCountPts: number;
+  /** Pillar 3 (0-25): Earliness / proximity to Didi stop-loss */
+  earlinessPts: number;
+  /** Distinct higher timeframes backing this setup (e.g. 2 for M + 12M) */
+  distinctHtfCount: number;
+}
+
 export interface AtsStateDetectionResult {
   state: AtsState;
   setupSide: 'BUY' | 'SELL' | 'NONE';
@@ -249,7 +260,10 @@ export interface AtsStateDetectionResult {
   highestHtfTimeframe: Timeframe | null;
   /** Deterministic hierarchy rank: higher trigger TF & higher S/R TF always rank first */
   setupHierarchyRank: number;
-  /** All matched HTF levels (SAR, MM7, MM20, Jack, Oggy) on timeframes > bbExitTimeframe */
+  /** 0-100 Setup Confidence Score: Timeframes (40) + S/R Count (35) + Earliness to Didi (25) */
+  setupConfidenceScore: number;
+  scoreBreakdown: SetupScoreBreakdown;
+  /** All matched HTF levels (BB, SAR, MM7, MM20, Jack, Oggy) on timeframes > bbExitTimeframe */
   matchedHtfLevels: MatchedHTFLevel[];
   ClusterDensityCount: number;
   RiskToDidiPercentage: number;
@@ -281,7 +295,10 @@ export interface ScreenerResult {
   highestHtfTimeframe: Timeframe | null;
   /** Hierarchy rank: higher BB-exit TF + higher S/R TF always sorts at the top */
   setupHierarchyRank: number;
-  /** Matched HTF Supports/Resistances (SAR, MM7, MM20, Jack, Oggy) */
+  /** 0-100 Setup Confidence Score: Timeframes (40) + S/R Count (35) + Earliness to Didi (25) */
+  setupConfidenceScore: number;
+  scoreBreakdown: SetupScoreBreakdown;
+  /** Matched HTF Supports/Resistances (BB, SAR, MM7, MM20, Jack, Oggy) */
   matchedHtfLevels: MatchedHTFLevel[];
   direction: SetupDirection;
   signalStatus: SetupConfirmationStatus;
