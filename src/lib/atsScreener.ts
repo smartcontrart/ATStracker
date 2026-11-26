@@ -60,35 +60,44 @@ const DYNAMIC_CURVE_OVERSHOOT_BY_TF: Record<Timeframe, number> = {
 };
 
 const TRIGGER_TF_SCORE: Record<Timeframe, number> = {
-  D: 4,
-  W: 9,
-  M: 14,
-  '3M': 18,
-  '6M': 22,
-  '12M': 22,
+  D: 3,
+  W: 6,
+  M: 10,
+  '3M': 13,
+  '6M': 16,
+  '12M': 16,
 };
 
 const HTF_SR_TF_SCORE: Record<Timeframe, number> = {
-  D: 2,
-  W: 4,
-  M: 8,
-  '3M': 12,
-  '6M': 15,
-  '12M': 18,
+  D: 1,
+  W: 3,
+  M: 6,
+  '3M': 9,
+  '6M': 11,
+  '12M': 14,
 };
 
 /**
- * 0-100 Setup Confidence Score combining:
- * - Pillar 1 (0-40): Timeframe Power (BB-exit Trigger TF + Highest S/R TF)
- * - Pillar 2 (0-35): Number of Higher-TF Supports/Resistances backing the setup (+ Multi-HTF bonus)
- * - Pillar 3 (0-25): Earliness / Proximity to Didi (closer to Didi = earlier = higher score)
+ * 0-100 Setup Confidence Score combining 4 pillars:
+ * - Pillar 1 (0-30): Timeframe Power (BB-exit Trigger TF + Highest S/R TF)
+ * - Pillar 2 (0-30): Number of Higher-TF Supports/Resistances backing the setup (+ Multi-HTF bonus)
+ * - Pillar 3 (0-20): Earliness / Proximity to Didi (closer to Didi = earlier = higher score)
+ * - Pillar 4 (0-20): Bollinger Band Divergence on the trigger TF (stronger divergence = higher score)
  */
 export function computeSetupConfidenceScore(params: {
   triggerTf: Timeframe;
   matchedLevels: MatchedHTFLevel[];
   riskToDidiPct: number;
+  phase2Diverging: boolean;
+  bbExpansionPct: number;
 }): { score: number; breakdown: SetupScoreBreakdown } {
-  const { triggerTf, matchedLevels, riskToDidiPct } = params;
+  const {
+    triggerTf,
+    matchedLevels,
+    riskToDidiPct,
+    phase2Diverging,
+    bbExpansionPct,
+  } = params;
   if (matchedLevels.length === 0) {
     return {
       score: 0,
@@ -96,41 +105,62 @@ export function computeSetupConfidenceScore(params: {
         timeframePts: 0,
         srCountPts: 0,
         earlinessPts: 0,
+        bbDivergencePts: 0,
+        bbExpansionPct: 0,
         distinctHtfCount: 0,
       },
     };
   }
 
-  // Pillar 1: Timeframe Power (max 40)
+  // Pillar 1: Timeframe Power (max 30)
   const highestHtf = matchedLevels[0].timeframe;
   const timeframePts = Math.min(
-    40,
+    30,
     TRIGGER_TF_SCORE[triggerTf] + HTF_SR_TF_SCORE[highestHtf]
   );
 
-  // Pillar 2: Number of Supports/Resistances + Multi-HTF Confluence (max 35)
+  // Pillar 2: Number of Supports/Resistances + Multi-HTF Confluence (max 30)
   const count = matchedLevels.length;
   const distinctHtfCount = new Set(matchedLevels.map((l) => l.timeframe)).size;
   const baseCountPts =
-    count >= 4 ? 32 : count === 3 ? 27 : count === 2 ? 20 : 10;
+    count >= 4 ? 27 : count === 3 ? 23 : count === 2 ? 17 : 8;
   const multiHtfBonus = distinctHtfCount >= 2 ? 3 : 0;
-  const srCountPts = Math.min(35, baseCountPts + multiHtfBonus);
+  const srCountPts = Math.min(30, baseCountPts + multiHtfBonus);
 
-  // Pillar 3: Earliness / Proximity to Didi (max 25)
+  // Pillar 3: Earliness / Proximity to Didi (max 20)
   let earlinessPts = 2;
-  if (riskToDidiPct <= 0.5) earlinessPts = 25;
-  else if (riskToDidiPct <= 1.0) earlinessPts = 21;
-  else if (riskToDidiPct <= 2.0) earlinessPts = 16;
-  else if (riskToDidiPct <= 3.5) earlinessPts = 11;
-  else if (riskToDidiPct <= 5.5) earlinessPts = 6;
+  if (riskToDidiPct <= 0.5) earlinessPts = 20;
+  else if (riskToDidiPct <= 1.0) earlinessPts = 17;
+  else if (riskToDidiPct <= 2.0) earlinessPts = 13;
+  else if (riskToDidiPct <= 3.5) earlinessPts = 9;
+  else if (riskToDidiPct <= 5.5) earlinessPts = 5;
 
-  const score = Math.min(100, timeframePts + srCountPts + earlinessPts);
+  // Pillar 4: Bollinger Band Divergence on Trigger TF (max 20)
+  let bbDivergencePts = 0;
+  if (phase2Diverging) {
+    if (bbExpansionPct >= 25) bbDivergencePts = 20;
+    else if (bbExpansionPct >= 15) bbDivergencePts = 17;
+    else if (bbExpansionPct >= 8) bbDivergencePts = 14;
+    else if (bbExpansionPct >= 3) bbDivergencePts = 11;
+    else bbDivergencePts = 8;
+  } else if (bbExpansionPct >= 10) {
+    bbDivergencePts = 7;
+  } else if (bbExpansionPct > 0) {
+    bbDivergencePts = 4;
+  }
+
+  const score = Math.min(
+    100,
+    timeframePts + srCountPts + earlinessPts + bbDivergencePts
+  );
   return {
     score,
     breakdown: {
       timeframePts,
       srCountPts,
       earlinessPts,
+      bbDivergencePts,
+      bbExpansionPct: Math.round(bbExpansionPct * 10) / 10,
       distinctHtfCount,
     },
   };
@@ -641,6 +671,20 @@ export function detectAtsSetup(assetData: {
       const phase2Diverging =
         currBB.upper > prevBB.upper && currBB.lower < prevBB.lower;
 
+      // Measure Bollinger Band divergence strength (% bandwidth expansion over 1-2 bars)
+      const prev2BB = bbArr.length >= 3 ? bbArr[bbArr.length - 3] : null;
+      const bwExp1 =
+        prevBB.bandwidth > 0
+          ? ((currBB.bandwidth - prevBB.bandwidth) / prevBB.bandwidth) * 100
+          : 0;
+      const bwExp2 =
+        prev2BB && prev2BB.bandwidth > 0
+          ? (((currBB.bandwidth - prev2BB.bandwidth) / prev2BB.bandwidth) *
+              100) *
+            0.65
+          : bwExp1;
+      const bbExpansionPct = Math.max(bwExp1, bwExp2);
+
       const didiPrice = refExtremePrice;
       const riskToDidiPct =
         didiPrice > 0 && livePrice > 0
@@ -653,6 +697,8 @@ export function detectAtsSetup(assetData: {
         triggerTf,
         matchedLevels,
         riskToDidiPct,
+        phase2Diverging,
+        bbExpansionPct,
       });
 
       if (
@@ -698,6 +744,8 @@ export function detectAtsSetup(assetData: {
         timeframePts: 0,
         srCountPts: 0,
         earlinessPts: 0,
+        bbDivergencePts: 0,
+        bbExpansionPct: 0,
         distinctHtfCount: 0,
       },
       matchedHtfLevels: [],
@@ -922,11 +970,13 @@ export function evaluateATSScreener(params: {
       } > ${detection.bbExitTimeframe}): ${levelList}.`
     );
     reasoningBullets.push(
-      `Confidence Score: ${detection.setupConfidenceScore}/100 (Timeframes: ${detection.scoreBreakdown.timeframePts}/40 · S/R Count: ${detection.scoreBreakdown.srCountPts}/35 [${detection.ClusterDensityCount} level${
+      `Confidence Score: ${detection.setupConfidenceScore}/100 (Timeframes: ${detection.scoreBreakdown.timeframePts}/30 · S/R Count: ${detection.scoreBreakdown.srCountPts}/30 [${detection.ClusterDensityCount} level${
         detection.ClusterDensityCount > 1 ? 's' : ''
       } across ${detection.scoreBreakdown.distinctHtfCount} HTF${
         detection.scoreBreakdown.distinctHtfCount > 1 ? 's' : ''
-      }] · Earliness to Didi: ${detection.scoreBreakdown.earlinessPts}/25).`
+      }] · Earliness to Didi: ${detection.scoreBreakdown.earlinessPts}/20 · BB Divergence: ${detection.scoreBreakdown.bbDivergencePts}/20 [${
+        detection.scoreBreakdown.bbExpansionPct >= 0 ? '+' : ''
+      }${detection.scoreBreakdown.bbExpansionPct.toFixed(1)}% BW]).`
     );
     reasoningBullets.push(
       `Didi Stop-Loss: ${fmtNum(

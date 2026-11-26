@@ -403,7 +403,8 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
             <span className="font-mono font-semibold text-slate-900">
               Confidence Score (0–100)
             </span>
-            : Timeframes (40) + S/R Count (35) + Earliness to Didi (25).
+            : Timeframes (30) + S/R Count (30) + Earliness/Didi (20) + BB
+            Divergence (20).
           </p>
         </div>
 
@@ -798,7 +799,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                     </span>
                     <div className="flex items-center gap-1 shrink-0">
                       <span
-                        title={`Score ${hit.setupConfidenceScore}/100 (TF ${hit.scoreBreakdown?.timeframePts ?? 0}/40 · S/R ${hit.scoreBreakdown?.srCountPts ?? 0}/35 · Didi ${hit.scoreBreakdown?.earlinessPts ?? 0}/25)`}
+                        title={`Score ${hit.setupConfidenceScore}/100 (TF ${hit.scoreBreakdown?.timeframePts ?? 0}/30 · S/R ${hit.scoreBreakdown?.srCountPts ?? 0}/30 · Didi ${hit.scoreBreakdown?.earlinessPts ?? 0}/20 · BB Div ${hit.scoreBreakdown?.bbDivergencePts ?? 0}/20)`}
                         className={cn(
                           'rounded px-1.5 py-0.5 font-mono text-[10px] font-extrabold',
                           hit.setupConfidenceScore >= 75
@@ -1007,7 +1008,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                           <div className="flex flex-wrap items-center gap-1.5">
                             {isActive && (
                               <span
-                                title={`Score ${row.setupConfidenceScore}/100 — Timeframes: ${row.scoreBreakdown?.timeframePts ?? 0}/40 · S/R Count: ${row.scoreBreakdown?.srCountPts ?? 0}/35 · Earliness (Didi): ${row.scoreBreakdown?.earlinessPts ?? 0}/25`}
+                                title={`Score ${row.setupConfidenceScore}/100 — Timeframes: ${row.scoreBreakdown?.timeframePts ?? 0}/30 · S/R Count: ${row.scoreBreakdown?.srCountPts ?? 0}/30 · Earliness (Didi): ${row.scoreBreakdown?.earlinessPts ?? 0}/20 · BB Divergence: ${row.scoreBreakdown?.bbDivergencePts ?? 0}/20 (+${(row.scoreBreakdown?.bbExpansionPct ?? 0).toFixed(1)}% BW)`}
                                 className={cn(
                                   'inline-flex items-center rounded px-2 py-0.5 font-mono text-xs font-extrabold text-white',
                                   row.setupConfidenceScore >= 75
@@ -1045,9 +1046,10 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                           </div>
                           {isActive && row.scoreBreakdown && (
                             <div className="text-[10px] font-mono text-slate-500">
-                              TF {row.scoreBreakdown.timeframePts}/40 · S/R{' '}
-                              {row.scoreBreakdown.srCountPts}/35 · Didi{' '}
-                              {row.scoreBreakdown.earlinessPts}/25
+                              TF {row.scoreBreakdown.timeframePts} · S/R{' '}
+                              {row.scoreBreakdown.srCountPts} · Didi{' '}
+                              {row.scoreBreakdown.earlinessPts} · BB Div{' '}
+                              {row.scoreBreakdown.bbDivergencePts}
                             </div>
                           )}
                           <p className="text-xs text-slate-700 leading-snug line-clamp-2">

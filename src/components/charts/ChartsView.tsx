@@ -433,7 +433,8 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
                     <div className="text-[9px] text-slate-500">
                       TF {payload.screener.scoreBreakdown.timeframePts} · S/R{' '}
                       {payload.screener.scoreBreakdown.srCountPts} · Didi{' '}
-                      {payload.screener.scoreBreakdown.earlinessPts}
+                      {payload.screener.scoreBreakdown.earlinessPts} · BB{' '}
+                      {payload.screener.scoreBreakdown.bbDivergencePts}
                     </div>
                   )}
                 </div>

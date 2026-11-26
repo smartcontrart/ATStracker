@@ -241,12 +241,16 @@ export interface MatchedHTFLevel {
 }
 
 export interface SetupScoreBreakdown {
-  /** Pillar 1 (0-40): BB-exit Trigger TF + Highest S/R TF */
+  /** Pillar 1 (0-30): BB-exit Trigger TF + Highest S/R TF */
   timeframePts: number;
-  /** Pillar 2 (0-35): Number of HTF Supports/Resistances + Multi-HTF breadth */
+  /** Pillar 2 (0-30): Number of HTF Supports/Resistances + Multi-HTF breadth */
   srCountPts: number;
-  /** Pillar 3 (0-25): Earliness / proximity to Didi stop-loss */
+  /** Pillar 3 (0-20): Earliness / proximity to Didi stop-loss */
   earlinessPts: number;
+  /** Pillar 4 (0-20): Bollinger Band divergence strength on the trigger TF */
+  bbDivergencePts: number;
+  /** Relative bandwidth expansion % on the trigger TF */
+  bbExpansionPct: number;
   /** Distinct higher timeframes backing this setup (e.g. 2 for M + 12M) */
   distinctHtfCount: number;
 }
