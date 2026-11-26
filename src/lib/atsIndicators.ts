@@ -122,6 +122,57 @@ function evaluateBaselineIntegrity(
 } {
   const lastIdx = bars.length - 1;
   const maxOvershootPct = AUTOUR_OVERSHOOT_TOL_PCT[timeframe];
+  const curBar = bars[lastIdx];
+  const prevBar = lastIdx > refIdx ? bars[lastIdx - 1] : null;
+
+  // 0. Timeframe-bar piercing guard:
+  // If the current bar (or previous-to-current bar transition) sliced straight across `levelPrice`,
+  // the line was pierced ("transpercé") and must NOT be plotted or flipped into the opposite polarity.
+  if (
+    (curBar.open < levelPrice && currentPrice > levelPrice) ||
+    (prevBar && prevBar.close < levelPrice && currentPrice > levelPrice)
+  ) {
+    return {
+      polarity: 'RED',
+      isPierced: true,
+      autourZone: 'PIERCED',
+      autourWeight: 0,
+    };
+  }
+  if (
+    (curBar.open > levelPrice && currentPrice < levelPrice) ||
+    (prevBar && prevBar.close > levelPrice && currentPrice < levelPrice)
+  ) {
+    return {
+      polarity: 'GREEN',
+      isPierced: true,
+      autourZone: 'PIERCED',
+      autourWeight: 0,
+    };
+  }
+  // Intrabar deep wick breach on the current timeframe bar (> maxOvershootPct beyond the level)
+  if (
+    currentPrice >= levelPrice &&
+    curBar.low < levelPrice * (1 - maxOvershootPct / 100)
+  ) {
+    return {
+      polarity: 'GREEN',
+      isPierced: true,
+      autourZone: 'PIERCED',
+      autourWeight: 0,
+    };
+  }
+  if (
+    currentPrice <= levelPrice &&
+    curBar.high > levelPrice * (1 + maxOvershootPct / 100)
+  ) {
+    return {
+      polarity: 'RED',
+      isPierced: true,
+      autourZone: 'PIERCED',
+      autourWeight: 0,
+    };
+  }
 
   const dailyConsistent =
     Boolean(recentDailyBars) &&
