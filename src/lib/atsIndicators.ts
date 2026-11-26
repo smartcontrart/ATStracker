@@ -864,12 +864,6 @@ function populateSetup1234Signals(
   timeframes: Record<Timeframe, TimeframeATSData>,
   currentPrice: number
 ): void {
-  const hlc3BBByTf = {} as Record<Timeframe, BollingerBandPoint | null>;
-  for (const tf of ALL_TIMEFRAMES) {
-    const typ = calculateTypicalBollingerBands(timeframes[tf].bars, 20, 2);
-    hlc3BBByTf[tf] = typ.length > 0 ? typ[typ.length - 1] : null;
-  }
-
   for (const tf of ALL_TIMEFRAMES) {
     const tfData = timeframes[tf];
     const bars = tfData.bars;
@@ -883,10 +877,10 @@ function populateSetup1234Signals(
     );
     if (higherTfs.length === 0) continue;
 
-    // Matches `confirmed_max_age` in setup1234.pine: 8 bars on 1D, 2 bars on HTFs
-    const maxAge = tf === 'D' ? 8 : 2;
+    const maxAge = tf === 'D' ? 5 : 1;
     const maxLookback = Math.min(maxAge, bars.length - 2);
     const sma20Offset = bars.length - tfData.sma20.length;
+    const bbOffset = bars.length - tfData.bollingerBands.length;
 
     let bestSignalBarIdx = -1;
     let isBullSetup = true;
@@ -895,15 +889,21 @@ function populateSetup1234Signals(
     for (let lb = 0; lb <= maxLookback; lb++) {
       const barIdx = bars.length - 1 - lb;
       const testBar = bars[barIdx];
-      const bullHits: string[] = [];
-      const bearHits: string[] = [];
+      const bbIdx = barIdx - bbOffset;
+      const bbAtBar =
+        bbIdx >= 0 && bbIdx < tfData.bollingerBands.length
+          ? tfData.bollingerBands[bbIdx]
+          : tfData.latestBB;
 
-      // Validate post-trigger invalidation & SMA20 finalization (setup1234.pine lines 414-427)
-      let bullStillValid = true;
-      let bearStillValid = true;
+      // For historical bars (lb > 0), strictly require Bollinger Band excess per setup1234.pine lines 374 & 376
+      let bullStillValid =
+        lb === 0 || Boolean(bbAtBar && testBar.low <= bbAtBar.lower * 1.002);
+      let bearStillValid =
+        lb === 0 || Boolean(bbAtBar && testBar.high >= bbAtBar.upper * 0.998);
+
       if (lb > 0) {
-        const bullInvalidFloor = testBar.low * 0.992;
-        const bearInvalidCeil = testBar.high * 1.008;
+        const bullInvalidFloor = testBar.low * 0.995;
+        const bearInvalidCeil = testBar.high * 1.005;
         for (let k = barIdx + 1; k < bars.length; k++) {
           const s20Idx = k - sma20Offset;
           const s20AtK =
@@ -922,9 +922,12 @@ function populateSetup1234Signals(
 
       if (!bullStillValid && !bearStillValid) continue;
 
+      const bullHits: string[] = [];
+      const bearHits: string[] = [];
+
       for (const htf of higherTfs) {
         const htfData = timeframes[htf];
-        const tolApp = htf === 'W' || htf === 'M' ? 0.015 : 0.018;
+        const tolApp = htf === 'W' || htf === 'M' ? 0.012 : 0.014;
         const tolBrk = (AUTOUR_OVERSHOOT_TOL_PCT[htf] || 1.2) / 100;
 
         const isNearBull = (level: number) =>
@@ -932,7 +935,7 @@ function populateSetup1234Signals(
           level > 0 &&
           currentPrice >= level * (1 - tolBrk) &&
           (testBar.low < level
-            ? level - testBar.low <= testBar.close * (tolBrk * 1.15)
+            ? level - testBar.low <= testBar.close * tolBrk
             : testBar.low - level <= testBar.close * tolApp);
 
         const isNearBear = (level: number) =>
@@ -940,7 +943,7 @@ function populateSetup1234Signals(
           level > 0 &&
           currentPrice <= level * (1 + tolBrk) &&
           (testBar.high > level
-            ? testBar.high - level <= testBar.close * (tolBrk * 1.15)
+            ? testBar.high - level <= testBar.close * tolBrk
             : level - testBar.high <= testBar.close * tolApp);
 
         // 1. Unpierced HTF Oggy & Jack baselines
@@ -999,25 +1002,16 @@ function populateSetup1234Signals(
           }
         }
 
-        // 4. HTF Bollinger Lower / Upper Band (close & hlc3 typical price)
-        const hlcBB = hlc3BBByTf[htf];
+        // 4. HTF Bollinger Lower / Upper Band (strict slope: lowerGreen for Bull, !upperGreen for Bear)
         if (htfData.latestBB) {
-          const allowBullBB =
-            htfData.latestBB.lowerGreen ||
-            hlcBB?.lowerGreen ||
-            ((htf === 'W' || htf === 'M') &&
-              currentPrice > htfData.latestBB.lower);
           if (
-            allowBullBB &&
-            (isNearBull(htfData.latestBB.lower) ||
-              (hlcBB ? isNearBull(hlcBB.lower) : false))
+            htfData.latestBB.lowerGreen &&
+            isNearBull(htfData.latestBB.lower)
           ) {
             bullHits.push(`${htf}-BBLow`);
-          }
-          if (
-            (!htfData.latestBB.upperGreen &&
-              isNearBear(htfData.latestBB.upper)) ||
-            (hlcBB && !hlcBB.upperGreen && isNearBear(hlcBB.upper))
+          } else if (
+            !htfData.latestBB.upperGreen &&
+            isNearBear(htfData.latestBB.upper)
           ) {
             bearHits.push(`${htf}-BBHigh`);
           }
@@ -1026,12 +1020,7 @@ function populateSetup1234Signals(
 
       if (bullHits.length > 0 || bearHits.length > 0) {
         bestSignalBarIdx = barIdx;
-        isBullSetup =
-          currentPrice <= tfData.latestSMA20.value
-            ? bullHits.length > 0
-            : bearHits.length > bullHits.length
-            ? false
-            : true;
+        isBullSetup = bullHits.length >= bearHits.length;
         chosenConfluences = isBullSetup ? bullHits : bearHits;
         if (chosenConfluences.length > 0) break;
       }
@@ -1040,24 +1029,18 @@ function populateSetup1234Signals(
     if (bestSignalBarIdx < 0 || chosenConfluences.length === 0) continue;
 
     const signalBar = bars[bestSignalBarIdx];
-    const age = bars.length - 1 - bestSignalBarIdx;
     const bbArr = tfData.bollingerBands;
+    const bbCurr = bbArr.length >= 1 ? bbArr[bbArr.length - 1] : null;
+    const bbPrev = bbArr.length >= 2 ? bbArr[bbArr.length - 2] : null;
 
-    // Étape 3 confirmation: opposite Bollinger Band turned inward on any bar since trigger
-    let isConfirmed = false;
-    for (let lookback = 0; lookback <= Math.min(age + 1, 4); lookback++) {
-      const idx = bbArr.length - 1 - lookback;
-      if (idx >= 1) {
-        if (
-          isBullSetup
-            ? bbArr[idx].upper < bbArr[idx - 1].upper
-            : bbArr[idx].lower > bbArr[idx - 1].lower
-        ) {
-          isConfirmed = true;
-          break;
-        }
-      }
-    }
+    // Étape 3 confirmation: opposite Bollinger Band curving inward on CURRENT bar
+    const isConfirmed = Boolean(
+      bbCurr &&
+        bbPrev &&
+        (isBullSetup
+          ? bbCurr.upper < bbPrev.upper
+          : bbCurr.lower > bbPrev.lower)
+    );
 
     const tp1Sma7 = tfData.latestSMA7.value;
     const tp2Sma20 = tfData.latestSMA20.value;

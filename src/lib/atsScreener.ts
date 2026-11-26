@@ -1,6 +1,5 @@
 import {
   AUTOUR_OVERSHOOT_TOL_PCT,
-  calculateTypicalBollingerBands,
   computeAutourWeight,
   flattenTimeframeBaselines,
 } from './atsIndicators.ts';
@@ -8,7 +7,6 @@ import { ALL_TIMEFRAMES, HIGHER_TIMEFRAMES } from '../types/ats.ts';
 import type {
   AssetCategory,
   ATSBaseline,
-  BollingerBandPoint,
   DidiTarget,
   MacroTargetTP2,
   ScreenerResult,
@@ -26,6 +24,15 @@ const TIMEFRAME_WEIGHTS: Record<Timeframe, number> = {
   '3M': 1.9,
   '6M': 2.25,
   '12M': 2.6,
+};
+
+const TIMEFRAME_BASE_POINTS: Record<Timeframe, number> = {
+  D: 10,
+  W: 16,
+  M: 20,
+  '3M': 23,
+  '6M': 25,
+  '12M': 28,
 };
 
 const SHORT_KEY_LABELS: Record<string, string> = {
@@ -90,7 +97,7 @@ function buildHorizonMatrix(
       }
 
       const absDist = (Math.abs(livePrice - l.price) / livePrice) * 100;
-      if (l.autourWeight >= 0.65 || absDist <= 1.6) {
+      if (l.autourWeight >= 0.72 || absDist <= 1.2) {
         wallTouches.push({
           shortName,
           label: l.label,
@@ -134,14 +141,21 @@ function buildHorizonMatrix(
 }
 
 /**
- * Evaluates the full 4-Step Sequential AT.S Protocol + "Autour" Elastic Scoring
- * aligned with `setup1234.pine`:
- * - Étape 1: Support / Résistance Macro HTF (Oggy/Jack non-transpercés, M20, M7, SAR Wilder, BB Inf/Sup Clôture & Prix Typique hlc3)
- *   - Supports both live proximity (J0) and active bounces within `confirmed_max_age = 8` daily bars
- *     that have NOT invalidated their Stop-Loss and have NOT yet finalized TP2 on D-M20.
- * - Étape 2: Tracé de Dee-Dee (seuil court terme à reconquérir)
- * - Étape 3: Retournement de la BB opposée (Signal Orange -> Signal Vert/Rouge) + reconquête Oggy/Dee-Dee + SL sous le plus bas Étape 1
- * - Étape 4: Objectifs M7 (1ère bille noire) et M20 (2ème bille noire) + validation R:R
+ * Symmetric, selective AT.S 4-Step Screener & Confidence Score (0 - 100%):
+ *
+ * Score Breakdown (100 pts max):
+ *   A. Primary HTF Wall Strength & "Autour" Precision (0..34 pts):
+ *      - Timeframe Base (1W=16, 1M=20, 3M=23, 6M=25, 12M=28) * autourWeight + exact-touch bonus (0..6).
+ *      - Single isolated 1W touch starts around ~16-22 pts (never inflated to 70%+ alone).
+ *   B. Multi-Timeframe & Multi-Indicator Confluence (0..26 pts):
+ *      - Rewards 2..5+ independent unpierced HTF levels clustering "Autour" of price across multiple TFs/families.
+ *   C. Étape 3 — Live Volatility Reversal & Momentum (0..22 pts):
+ *      - Opposite Bollinger Band curving inward ON THE CURRENT BAR (D/W/M): +10..14 pts (0 pts if still expanding).
+ *      - Wilder SAR aligned/flipped (+2..4 pts) + 1D M7/Oggy reclaimed (+4 pts).
+ *   D. Étape 2 & 4 — Live Risk/Reward to M20 Target (0..18 pts, or -8 penalty if R:R < 1.0x):
+ *      - Clear Dee-Dee / M7 threshold (+4 pts) + Live R:R to M20 (+6..14 pts).
+ *   E. Opposing HTF Headwind Penalty (0..-12 pts):
+ *      - Deducted if an unpierced opposite-polarity HTF wall sits right in the way.
  */
 export function evaluateATSScreener(params: {
   symbol: string;
@@ -170,51 +184,73 @@ export function evaluateATSScreener(params: {
 
   const dBars = timeframes.D.bars;
   const dSma20Arr = timeframes.D.sma20;
+  const dBBArr = timeframes.D.bollingerBands;
   const dM20 = timeframes.D.latestSMA20?.value ?? null;
   const dBB = timeframes.D.latestBB;
-  const wBB = timeframes.W.latestBB;
-
-  // Volatility-adaptive "Autour" scale ONLY for hyper-volatile assets (D BB bandwidth > 40%, e.g. NBIS at 83%)
-  const volatilityScale = dBB
-    ? Math.min(1.5, Math.max(1.0, dBB.bandwidth / 0.4))
-    : 1.0;
 
   const dailyConsistent =
     dBars.length >= 2 &&
     Math.abs(dBars[dBars.length - 1].close - livePrice) <=
       Math.max(0.01, livePrice * 0.03);
 
-  // Build active 0..8 daily trigger probes matching `confirmed_max_age = 8` in setup1234.pine
+  // Current-bar (live) opposite Bollinger Band turn check — strict, never looking back 5 days
+  const dOppositeCurvingBull =
+    dBBArr.length >= 2 &&
+    dBBArr[dBBArr.length - 1].upper < dBBArr[dBBArr.length - 2].upper;
+  const dOppositeCurvingBear =
+    dBBArr.length >= 2 &&
+    dBBArr[dBBArr.length - 1].lower > dBBArr[dBBArr.length - 2].lower;
+
+  // Live probe (age = 0)
   const bullProbes: ActiveTriggerProbe[] = [
     {
       age: 0,
-      low: dailyConsistent ? Math.min(dBars[dBars.length - 1].low, livePrice) : livePrice,
-      high: dailyConsistent ? Math.max(dBars[dBars.length - 1].high, livePrice) : livePrice,
+      low: dailyConsistent
+        ? Math.min(dBars[dBars.length - 1].low, livePrice)
+        : livePrice,
+      high: dailyConsistent
+        ? Math.max(dBars[dBars.length - 1].high, livePrice)
+        : livePrice,
       close: livePrice,
     },
   ];
   const bearProbes: ActiveTriggerProbe[] = [
     {
       age: 0,
-      low: dailyConsistent ? Math.min(dBars[dBars.length - 1].low, livePrice) : livePrice,
-      high: dailyConsistent ? Math.max(dBars[dBars.length - 1].high, livePrice) : livePrice,
+      low: dailyConsistent
+        ? Math.min(dBars[dBars.length - 1].low, livePrice)
+        : livePrice,
+      high: dailyConsistent
+        ? Math.max(dBars[dBars.length - 1].high, livePrice)
+        : livePrice,
       close: livePrice,
     },
   ];
 
-  if (dailyConsistent && dBars.length >= 5) {
+  // Strict setup1234.pine multi-bar bounce probes (age = 1..5 ONLY when that bar pierced outside 1D BB,
+  // opposite 1D BB is curving inward TODAY, Stop-Loss held, and D-M20 TP2 has NOT been reached yet)
+  if (dailyConsistent && dBars.length >= 6 && dBBArr.length >= 6) {
     const sma20Offset = dBars.length - dSma20Arr.length;
-    const maxLookback = Math.min(8, dBars.length - 2);
+    const bbOffset = dBars.length - dBBArr.length;
+    const maxLookback = Math.min(5, dBars.length - 2);
 
     for (let lb = 1; lb <= maxLookback; lb++) {
       const idx = dBars.length - 1 - lb;
       const bar = dBars[idx];
+      const bbIdx = idx - bbOffset;
+      const bbAtBar =
+        bbIdx >= 0 && bbIdx < dBBArr.length ? dBBArr[bbIdx] : dBB;
 
-      // Active LONG bounce check (setup1234.pine lines 414-427):
-      // Must still be below D-M20 (TP2 not closed above) and no subsequent close < triggerLow * 0.99
-      if (dM20 !== null && livePrice < dM20 * 0.999) {
+      // Strict Bullish setup1234.pine bounce: bar pierced <= D-BBLow, D-BBUp turning down TODAY, live < D-M20
+      if (
+        dM20 !== null &&
+        livePrice < dM20 * 0.992 &&
+        dOppositeCurvingBull &&
+        bbAtBar &&
+        bar.low <= bbAtBar.lower * 1.002
+      ) {
         let validBull = true;
-        const invalidFloor = bar.low * 0.99;
+        const invalidFloor = bar.low * 0.995;
         for (let k = idx + 1; k < dBars.length; k++) {
           const s20Idx = k - sma20Offset;
           const s20AtK =
@@ -236,14 +272,16 @@ export function evaluateATSScreener(params: {
         }
       }
 
-      // Active SHORT rejection check (setup1234.pine lines 458-471):
-      // Must still be above D-M20 (TP2 not closed below), triggered near upper BB, and no close > triggerHigh * 1.01
-      const nearUpperEnvelope =
-        (dBB && bar.high >= dBB.upper * 0.985) ||
-        (wBB && bar.high >= wBB.upper * 0.99);
-      if (dM20 !== null && livePrice > dM20 * 1.001 && nearUpperEnvelope) {
+      // Symmetric Strict Bearish setup1234.pine rejection: bar pierced >= D-BBUp, D-BBLow turning up TODAY, live > D-M20
+      if (
+        dM20 !== null &&
+        livePrice > dM20 * 1.008 &&
+        dOppositeCurvingBear &&
+        bbAtBar &&
+        bar.high >= bbAtBar.upper * 0.998
+      ) {
         let validBear = true;
-        const invalidCeil = bar.high * 1.01;
+        const invalidCeil = bar.high * 1.005;
         for (let k = idx + 1; k < dBars.length; k++) {
           const s20Idx = k - sma20Offset;
           const s20AtK =
@@ -267,15 +305,13 @@ export function evaluateATSScreener(params: {
     }
   }
 
-  // Evaluate best "Autour" touch across live price and active unfinalized bounce probes
+  // Symmetric evaluation for Bullish Support vs Bearish Resistance (NO directional bias!)
   const evaluateBestBullTouch = (
     levelPrice: number,
     maxOvershootPct: number,
-    baseMaxApproachPct = 2.2
+    maxApproachPct = 1.6
   ) => {
-    const effOvershoot = maxOvershootPct * volatilityScale;
-    const maxApproachPct = baseMaxApproachPct * volatilityScale;
-    if (levelPrice <= 0 || livePrice < levelPrice * (1 - effOvershoot / 100)) {
+    if (levelPrice <= 0 || livePrice < levelPrice * (1 - maxOvershootPct / 100)) {
       return {
         zone: 'PIERCED' as const,
         weight: 0,
@@ -288,7 +324,7 @@ export function evaluateATSScreener(params: {
     const liveSigned = ((livePrice - levelPrice) / levelPrice) * 100;
     const liveEval = computeAutourWeight(
       liveSigned,
-      effOvershoot,
+      maxOvershootPct,
       maxApproachPct
     );
     let bestZone = liveEval.zone;
@@ -301,10 +337,11 @@ export function evaluateATSScreener(params: {
       const wickSigned = ((probe.low - levelPrice) / levelPrice) * 100;
       const wickEval = computeAutourWeight(
         wickSigned,
-        effOvershoot * 1.2,
+        maxOvershootPct,
         maxApproachPct
       );
-      const ageFactor = Math.max(0.9, 1 - probe.age * 0.012);
+      // Meaningful decay with age so older bounces score lower than live touches
+      const ageFactor = probe.age === 0 ? 0.96 : Math.max(0.62, 0.92 - probe.age * 0.065);
       const adjustedWeight = wickEval.weight * ageFactor;
       if (adjustedWeight > bestWeight) {
         bestWeight = adjustedWeight;
@@ -324,22 +361,14 @@ export function evaluateATSScreener(params: {
     };
   };
 
-  // In AT.S / setup1234.pine (line 469), a SHORT setup only exists while price is ABOVE D-M20 (targeting D-M20 below)
-  const allowShortSetup =
-    !dailyConsistent || dM20 === null || livePrice >= dM20 * 0.995;
-
   const evaluateBestBearTouch = (
     levelPrice: number,
     maxOvershootPct: number,
-    maxApproachPct = 2.0
+    maxApproachPct = 1.6
   ) => {
-    if (
-      !allowShortSetup ||
-      levelPrice <= 0 ||
-      livePrice > levelPrice * (1 + maxOvershootPct / 100)
-    ) {
+    if (levelPrice <= 0 || livePrice > levelPrice * (1 + maxOvershootPct / 100)) {
       return {
-        zone: 'DISTANT' as const,
+        zone: 'PIERCED' as const,
         weight: 0,
         signedPct: ((levelPrice - livePrice) / levelPrice) * 100,
         age: 0,
@@ -363,10 +392,10 @@ export function evaluateATSScreener(params: {
       const wickSigned = ((levelPrice - probe.high) / levelPrice) * 100;
       const wickEval = computeAutourWeight(
         wickSigned,
-        maxOvershootPct * 1.2,
+        maxOvershootPct,
         maxApproachPct
       );
-      const ageFactor = Math.max(0.9, 1 - probe.age * 0.012);
+      const ageFactor = probe.age === 0 ? 0.96 : Math.max(0.62, 0.92 - probe.age * 0.065);
       const adjustedWeight = wickEval.weight * ageFactor;
       if (adjustedWeight > bestWeight) {
         bestWeight = adjustedWeight;
@@ -386,14 +415,7 @@ export function evaluateATSScreener(params: {
     };
   };
 
-  // Precompute hlc3 Bollinger Bands (Prix Typique) per HTF matching setup1234.pine lines 169 & 244
-  const hlc3BBByTf = {} as Record<Timeframe, BollingerBandPoint | null>;
-  for (const tf of HIGHER_TIMEFRAMES) {
-    const typ = calculateTypicalBollingerBands(timeframes[tf].bars, 20, 2);
-    hlc3BBByTf[tf] = typ.length > 0 ? typ[typ.length - 1] : null;
-  }
-
-  // Collect all UNPIERCED Macro Supports & Resistances across Higher Timeframes (1W, 1M, 3M, 6M, 12M)
+  // Collect UNPIERCED Macro Supports & Resistances across Higher Timeframes (1W, 1M, 3M, 6M, 12M)
   const htfGreenBaselines: ATSBaseline[] = [];
   const htfRedBaselines: ATSBaseline[] = [];
   const bullMacroWalls: MacroWallCandidate[] = [];
@@ -403,12 +425,12 @@ export function evaluateATSScreener(params: {
     const tfData = timeframes[tf];
     const maxOvershoot = AUTOUR_OVERSHOOT_TOL_PCT[tf];
 
-    // 1. Unpierced Oggy & Jack baselines
+    // 1. Unpierced Oggy & Jack baselines (completely symmetric GREEN vs RED)
     const unpierced = flattenTimeframeBaselines(tfData.Jack, tfData.Oggy, true);
     for (const line of unpierced) {
       if (line.polarity === 'GREEN') {
         htfGreenBaselines.push(line);
-        const touch = evaluateBestBullTouch(line.price, maxOvershoot, 2.2);
+        const touch = evaluateBestBullTouch(line.price, maxOvershoot, 1.6);
         if (touch.weight >= 0.45) {
           bullMacroWalls.push({
             label: line.label,
@@ -426,7 +448,7 @@ export function evaluateATSScreener(params: {
         }
       } else {
         htfRedBaselines.push(line);
-        const touch = evaluateBestBearTouch(line.price, maxOvershoot, 2.0);
+        const touch = evaluateBestBearTouch(line.price, maxOvershoot, 1.6);
         if (touch.weight >= 0.45) {
           bearMacroWalls.push({
             label: line.label,
@@ -445,11 +467,11 @@ export function evaluateATSScreener(params: {
       }
     }
 
-    // 2. Dynamic HTF M20 (SMA 20 Clôture) & M7 (SMA 7 Clôture)
+    // 2. Dynamic HTF M20 (SMA 20) & M7 (SMA 7) — symmetric rising vs falling
     if (tfData.latestSMA20) {
       const m20 = tfData.latestSMA20.value;
       if (tfData.latestSMA20.isGreen) {
-        const touch = evaluateBestBullTouch(m20, maxOvershoot, 1.9);
+        const touch = evaluateBestBullTouch(m20, maxOvershoot, 1.5);
         if (touch.weight >= 0.5) {
           bullMacroWalls.push({
             label: `${tf}-M20`,
@@ -465,7 +487,7 @@ export function evaluateATSScreener(params: {
           });
         }
       } else {
-        const touch = evaluateBestBearTouch(m20, maxOvershoot, 1.8);
+        const touch = evaluateBestBearTouch(m20, maxOvershoot, 1.5);
         if (touch.weight >= 0.5) {
           bearMacroWalls.push({
             label: `${tf}-M20`,
@@ -486,7 +508,7 @@ export function evaluateATSScreener(params: {
     if (tfData.latestSMA7) {
       const m7 = tfData.latestSMA7.value;
       if (tfData.latestSMA7.isGreen) {
-        const touch = evaluateBestBullTouch(m7, maxOvershoot, 1.7);
+        const touch = evaluateBestBullTouch(m7, maxOvershoot, 1.4);
         if (touch.weight >= 0.55) {
           bullMacroWalls.push({
             label: `${tf}-M7`,
@@ -502,7 +524,7 @@ export function evaluateATSScreener(params: {
           });
         }
       } else {
-        const touch = evaluateBestBearTouch(m7, maxOvershoot, 1.6);
+        const touch = evaluateBestBearTouch(m7, maxOvershoot, 1.4);
         if (touch.weight >= 0.55) {
           bearMacroWalls.push({
             label: `${tf}-M7`,
@@ -520,93 +542,60 @@ export function evaluateATSScreener(params: {
       }
     }
 
-    // 3. HTF Bollinger Lower / Upper Band (evaluating both Clôture and Prix Typique hlc3)
-    // Crucial AT.S rule (setup1234.pine line 348): BBSup is ONLY a Bear resistance when falling (!upperGreen)!
-    const hlcBB = hlc3BBByTf[tf];
+    // 3. HTF Bollinger Bands — STRICT slope filter (setup1234.pine lines 316 & 348):
+    //    - BBInf is ONLY a support when rising/flattening (`lowerGreen === true`)
+    //    - BBSup is ONLY a resistance when falling (`upperGreen === false`)
     if (tfData.latestBB) {
-      const bbLoClose = tfData.latestBB.lower;
-      const bbLoHlc = hlcBB?.lower ?? 0;
-
-      // Dynamic BBInf support: rising BBInf, or 1W/1M oversold envelope with opposite BB turning / D oversold
-      const allowBullBB =
-        tfData.latestBB.lowerGreen ||
-        hlcBB?.lowerGreen ||
-        ((tf === 'W' || tf === 'M') &&
-          livePrice > Math.min(bbLoClose, bbLoHlc > 0 ? bbLoHlc : bbLoClose) &&
-          (dBB ? bullProbes[0].low <= dBB.lower * 1.02 || !dBB.upperGreen : true));
-
-      if (allowBullBB) {
-        const closeTouch =
-          bbLoClose > 0
-            ? evaluateBestBullTouch(bbLoClose, maxOvershoot * 1.25, 2.4)
-            : null;
-        const hlcTouch =
-          bbLoHlc > 0
-            ? evaluateBestBullTouch(bbLoHlc, maxOvershoot * 1.25, 2.4)
-            : null;
-
-        const bestBBTouch =
-          hlcTouch && (!closeTouch || hlcTouch.weight > closeTouch.weight)
-            ? { ...hlcTouch, price: bbLoHlc }
-            : closeTouch
-            ? { ...closeTouch, price: bbLoClose }
-            : null;
-
-        if (bestBBTouch && bestBBTouch.weight >= 0.55) {
+      if (tfData.latestBB.lowerGreen && tfData.latestBB.lower > 0) {
+        const touch = evaluateBestBullTouch(
+          tfData.latestBB.lower,
+          maxOvershoot,
+          1.4
+        );
+        if (touch.weight >= 0.55) {
           bullMacroWalls.push({
             label: `${tf}-BBInf`,
             timeframe: tf,
-            price: bestBBTouch.price,
+            price: tfData.latestBB.lower,
             polarity: 'GREEN',
             kind: 'BB',
-            signedApproachPct: bestBBTouch.signedPct,
-            autourZone: bestBBTouch.zone,
-            autourWeight: bestBBTouch.weight,
-            triggerAgeBars: bestBBTouch.age,
-            triggerExtremePrice: bestBBTouch.extremePrice,
+            signedApproachPct: touch.signedPct,
+            autourZone: touch.zone,
+            autourWeight: touch.weight,
+            triggerAgeBars: touch.age,
+            triggerExtremePrice: touch.extremePrice,
           });
         }
       }
 
-      // Bearish BBSup: strictly requires falling upper band (!upperGreen) per setup1234.pine line 348
-      const closeBearTouch =
-        !tfData.latestBB.upperGreen && tfData.latestBB.upper > 0
-          ? evaluateBestBearTouch(tfData.latestBB.upper, maxOvershoot, 1.8)
-          : null;
-      const hlcBearTouch =
-        hlcBB && !hlcBB.upperGreen && hlcBB.upper > 0
-          ? evaluateBestBearTouch(hlcBB.upper, maxOvershoot, 1.8)
-          : null;
-
-      const bestBearBB =
-        hlcBearTouch &&
-        (!closeBearTouch || hlcBearTouch.weight > closeBearTouch.weight)
-          ? { ...hlcBearTouch, price: hlcBB!.upper }
-          : closeBearTouch
-          ? { ...closeBearTouch, price: tfData.latestBB.upper }
-          : null;
-
-      if (bestBearBB && bestBearBB.weight >= 0.55) {
-        bearMacroWalls.push({
-          label: `${tf}-BBSup`,
-          timeframe: tf,
-          price: bestBearBB.price,
-          polarity: 'RED',
-          kind: 'BB',
-          signedApproachPct: bestBearBB.signedPct,
-          autourZone: bestBearBB.zone,
-          autourWeight: bestBearBB.weight,
-          triggerAgeBars: bestBearBB.age,
-          triggerExtremePrice: bestBearBB.extremePrice,
-        });
+      if (!tfData.latestBB.upperGreen && tfData.latestBB.upper > 0) {
+        const touch = evaluateBestBearTouch(
+          tfData.latestBB.upper,
+          maxOvershoot,
+          1.4
+        );
+        if (touch.weight >= 0.55) {
+          bearMacroWalls.push({
+            label: `${tf}-BBSup`,
+            timeframe: tf,
+            price: tfData.latestBB.upper,
+            polarity: 'RED',
+            kind: 'BB',
+            signedApproachPct: touch.signedPct,
+            autourZone: touch.zone,
+            autourWeight: touch.weight,
+            triggerAgeBars: touch.age,
+            triggerExtremePrice: touch.extremePrice,
+          });
+        }
       }
     }
 
-    // 4. HTF Wilder SAR AT.S
+    // 4. HTF Wilder SAR AT.S — symmetric bullish vs bearish
     if (tfData.latestSAR) {
       const sarVal = tfData.latestSAR.value;
       if (tfData.latestSAR.isBullish) {
-        const touch = evaluateBestBullTouch(sarVal, maxOvershoot, 2.0);
+        const touch = evaluateBestBullTouch(sarVal, maxOvershoot, 1.4);
         if (touch.weight >= 0.55) {
           bullMacroWalls.push({
             label: `${tf}-SAR`,
@@ -622,7 +611,7 @@ export function evaluateATSScreener(params: {
           });
         }
       } else {
-        const touch = evaluateBestBearTouch(sarVal, maxOvershoot, 1.8);
+        const touch = evaluateBestBearTouch(sarVal, maxOvershoot, 1.4);
         if (touch.weight >= 0.55) {
           bearMacroWalls.push({
             label: `${tf}-SAR`,
@@ -664,9 +653,9 @@ export function evaluateATSScreener(params: {
         )[0]
       : null;
 
-  // Active Wall = at least one HTF Macro element in core "Autour" zone (weight >= 0.65)
-  const activeBullWalls = bullMacroWalls.filter((w) => w.autourWeight >= 0.65);
-  const activeBearWalls = bearMacroWalls.filter((w) => w.autourWeight >= 0.65);
+  // Strict Active Wall threshold: weight >= 0.70 (live within ~[-1.1%, +1.2%], or fresh BB-excess bounce)
+  const activeBullWalls = bullMacroWalls.filter((w) => w.autourWeight >= 0.7);
+  const activeBearWalls = bearMacroWalls.filter((w) => w.autourWeight >= 0.7);
 
   const isAtSupportWall = activeBullWalls.length > 0;
   const isAtResistanceWall = activeBearWalls.length > 0;
@@ -674,11 +663,8 @@ export function evaluateATSScreener(params: {
 
   let direction: SetupDirection = 'NEUTRAL';
   if (isAtSupportWall && isAtResistanceWall) {
-    let bullSum = activeBullWalls.reduce((s, w) => s + rankWall(w), 0);
-    let bearSum = activeBearWalls.reduce((s, w) => s + rankWall(w), 0);
-    // Add Daily polarity & SAR tie-breaker (e.g. DXY holding D-Oggy + D-SAR vs WMT/PG hitting D-BBUp)
-    if (timeframes.D.latestSAR?.isBullish) bullSum += 6;
-    if (dBB && bullProbes[0].high >= dBB.upper * 0.99) bearSum += 10;
+    const bullSum = activeBullWalls.reduce((s, w) => s + rankWall(w), 0);
+    const bearSum = activeBearWalls.reduce((s, w) => s + rankWall(w), 0);
     direction = bullSum >= bearSum ? 'LONG' : 'SHORT';
   } else if (isAtSupportWall) {
     direction = 'LONG';
@@ -688,6 +674,8 @@ export function evaluateATSScreener(params: {
 
   const activeMacroCluster =
     direction === 'SHORT' ? activeBearWalls : activeBullWalls;
+  const opposingMacroCluster =
+    direction === 'SHORT' ? activeBullWalls : activeBearWalls;
   const primaryMacro =
     activeMacroCluster.length > 0 ? activeMacroCluster[0] : null;
 
@@ -731,7 +719,7 @@ export function evaluateATSScreener(params: {
     direction === 'SHORT' ||
     (direction === 'NEUTRAL' && nearestAnyLine?.polarity === 'RED');
 
-  // Étape 3 Stop-Loss: Strictly 0.5% below the Étape 1 trigger low / primary macro floor (setup1234.pine line 414)
+  // Étape 3 Stop-Loss: Strictly 0.5% beyond the Étape 1 floor / ceiling
   const latestDailyLow =
     dBars.length > 0 ? dBars[dBars.length - 1].low : livePrice;
   const latestDailyHigh =
@@ -756,56 +744,41 @@ export function evaluateATSScreener(params: {
   );
   const riskPct = (Math.abs(livePrice - stopLoss) / livePrice) * 100;
 
-  // Étape 2 & 4 Targets: TP1 = M7 / Didi (1ère bille noire), TP2 = M20 (2ème bille noire)
+  // Étape 2 Targets: TP1 = M7 / Didi (1ère bille noire)
   const effectiveTargetTP1 = isShortBias ? downsideDidi : Didi;
-  const maxTriggerAge = primaryMacro ? primaryMacro.triggerAgeBars : 0;
-
-  // If price already reclaimed D-M7 during an active bounce toward D-M20, TP1 (Étape 2) is already validated!
-  const tp1AlreadyReclaimed =
-    !isShortBias &&
-    maxTriggerAge > 0 &&
-    timeframes.D.latestSMA7 !== null &&
-    livePrice >= timeframes.D.latestSMA7.value;
-
   const step2Didi = Boolean(
-    tp1AlreadyReclaimed ||
-      (effectiveTargetTP1 && effectiveTargetTP1.upsidePct > 0.15)
+    effectiveTargetTP1 && effectiveTargetTP1.upsidePct > 0.25
   );
 
-  // Étape 3: Retournement de la BB opposée (sur la bougie courante ou depuis le déclenchement comme setup1234.pine line 433)
+  // Étape 3: STRICT LIVE opposite Bollinger Band turn — MUST turn on 1D trigger timeframe (setup1234.pine line 433)
   const curvingTfs = (['D', 'W', 'M'] as const).filter((tf) => {
     const bb = timeframes[tf].bollingerBands;
     if (bb.length < 2) return false;
-    const maxLb = tf === 'D' ? Math.min(maxTriggerAge + 1, 4) : 1;
-    for (let lb = 0; lb <= maxLb; lb++) {
-      const idx = bb.length - 1 - lb;
-      if (idx >= 1) {
-        if (!isShortBias && bb[idx].upper < bb[idx - 1].upper) return true;
-        if (isShortBias && bb[idx].lower > bb[idx - 1].lower) return true;
-      }
-    }
-    return false;
+    const curr = bb[bb.length - 1];
+    const prev = bb[bb.length - 2];
+    return !isShortBias ? curr.upper < prev.upper : curr.lower > prev.lower;
   });
 
-  const step3VolatilityReversal = curvingTfs.length > 0;
+  // Confirmation strictly requires 1D opposite Bollinger Band turning inward (Phase 3 on 1D)
+  const step3VolatilityReversal = curvingTfs.includes('D');
   const reclaimedShortTermOggy = !isShortBias
-    ? Boolean(timeframes.D.latestSMA7?.isGreen || tp1AlreadyReclaimed)
+    ? Boolean(timeframes.D.latestSMA7?.isGreen)
     : Boolean(timeframes.D.latestSMA7 && !timeframes.D.latestSMA7.isGreen);
 
-  let volatilitySignal = 'Phase 2 (Expansion BB)';
+  let volatilitySignal = 'Phase 2 (Expansion BB — Non confirmé)';
   if (curvingTfs.length > 0) {
     volatilitySignal = `Phase 3 (${curvingTfs.join('+')} BB opposée retournée)`;
   } else if (timeframes.D.bbCompressing) {
     volatilitySignal = 'Compression BB en cours';
   }
 
-  // Signal Orange (Candidat) vs Signal Vert / Rouge (Confirmé) per setup1234.pine
+  // Signal Orange (Candidat) vs Signal Vert / Rouge (Confirmé)
   let signalStatus: SetupConfirmationStatus = 'WATCH';
   if (isAtWall) {
     signalStatus = step3VolatilityReversal ? 'CONFIRMED' : 'CANDIDATE';
   }
 
-  // Étape 4: Objectif Final M20 (2ème bille noire — D-M20 si marge >0.6%, sinon W-M20 / M-M20 / BB opposée)
+  // Étape 4: Objectif Final M20 (2ème bille noire) & LIVE Risk/Reward Ratio
   const m20Candidates: MacroTargetTP2[] = [];
   for (const tf of ['D', ...HIGHER_TIMEFRAMES] as Timeframe[]) {
     const m20 =
@@ -835,14 +808,6 @@ export function evaluateATSScreener(params: {
       (a, b) => Math.abs(a.upsidePct) - Math.abs(b.upsidePct)
     );
     macroTargetTP2 = m20Candidates[0];
-  } else if (!isShortBias && timeframes.W.latestBB && timeframes.W.latestBB.upper > livePrice * 1.004) {
-    const wUp = timeframes.W.latestBB.upper;
-    macroTargetTP2 = {
-      price: wUp,
-      label: 'W-BBSup',
-      timeframe: 'W',
-      upsidePct: ((wUp - livePrice) / livePrice) * 100,
-    };
   } else if (timeframes.W.latestSMA20) {
     const wM20 = timeframes.W.latestSMA20.value;
     macroTargetTP2 = {
@@ -853,36 +818,25 @@ export function evaluateATSScreener(params: {
     };
   }
 
-  // Evaluate R:R both from current livePrice AND from the Étape 1 trigger price
-  const triggerEntryRef = primaryMacro
-    ? !isShortBias
-      ? Math.max(primaryMacro.price, primaryMacro.triggerExtremePrice)
-      : Math.min(primaryMacro.price, primaryMacro.triggerExtremePrice)
-    : livePrice;
-
-  const targetPriceVal =
-    macroTargetTP2 && Math.abs(macroTargetTP2.upsidePct) > 0.35
-      ? macroTargetTP2.price
+  // Honest LIVE Risk/Reward (measured strictly from current livePrice, never historical entry!)
+  const liveReward =
+    macroTargetTP2 &&
+    ((!isShortBias && macroTargetTP2.upsidePct > 0.4) ||
+      (isShortBias && macroTargetTP2.upsidePct < -0.4))
+      ? Math.abs(macroTargetTP2.price - livePrice)
       : effectiveTargetTP1
-      ? effectiveTargetTP1.price
-      : livePrice;
-
-  const liveReward = Math.abs(targetPriceVal - livePrice);
-  const setupReward = Math.abs(targetPriceVal - triggerEntryRef);
-  const setupRisk = Math.max(
-    Math.abs(triggerEntryRef - stopLoss),
-    livePrice * 0.005
-  );
+      ? Math.abs(effectiveTargetTP1.price - livePrice)
+      : 0;
 
   const riskRewardRatio =
-    liveReward > 0 && riskAmount > 0
-      ? Math.max(liveReward / riskAmount, (setupReward / setupRisk) * 0.85)
-      : null;
+    liveReward > 0 && riskAmount > 0 ? liveReward / riskAmount : null;
 
   const step4MacroM20 = Boolean(
     macroTargetTP2 &&
-      Math.abs(macroTargetTP2.upsidePct) > 0.35 &&
-      (riskRewardRatio === null || riskRewardRatio >= 1.0)
+      ((!isShortBias && macroTargetTP2.upsidePct > 0.6) ||
+        (isShortBias && macroTargetTP2.upsidePct < -0.6)) &&
+      riskRewardRatio !== null &&
+      riskRewardRatio >= 1.2
   );
 
   let setupStep: 0 | 1 | 2 | 3 | 4 = 0;
@@ -899,89 +853,124 @@ export function evaluateATSScreener(params: {
     }
   }
 
-  // Elastic "Autour" Quantitative Confidence Score (0 - 100%)
+  // =========================================================================
+  // HONEST, SELECTIVE QUANTITATIVE CONFIDENCE SCORE (0 - 100%)
+  // =========================================================================
   let rawScore = 0;
-  if (isAtWall && primaryMacro) {
-    // 1. Primary Macro Wall Timeframe + Elastic "Autour" Precision (44..60 pts)
-    const maxTfWeight = Math.max(
-      ...activeMacroCluster.map((w) => TIMEFRAME_WEIGHTS[w.timeframe])
-    );
-    const tfBase = 35 + ((maxTfWeight - 1.15) / 1.45) * 13; // 35 (1W) .. 48 (12M)
-    const autourQualityBonus = primaryMacro.autourWeight * 12; // 7.8 .. 12
-    rawScore += tfBase + autourQualityBonus;
 
-    // 2. Multi-Indicator / Multi-HTF Cluster Confluence Bonus (up to 16 pts)
+  if (isAtWall && primaryMacro) {
+    // A. Primary HTF Wall Strength & "Autour" Precision (max 34 pts)
+    const maxTfPoints = Math.max(
+      ...activeMacroCluster.map((w) => TIMEFRAME_BASE_POINTS[w.timeframe])
+    );
+    const exactTouchBonus =
+      Math.abs(primaryMacro.signedApproachPct) <= 0.5 &&
+      primaryMacro.triggerAgeBars === 0
+        ? 6
+        : Math.abs(primaryMacro.signedApproachPct) <= 1.0 &&
+          primaryMacro.triggerAgeBars <= 1
+        ? 3
+        : 0;
+    rawScore += maxTfPoints * primaryMacro.autourWeight + exactTouchBonus;
+
+    // B. Multi-Timeframe & Multi-Indicator Confluence (max 26 pts; 0 pts if only 1 isolated line!)
     let clusterBonus = 0;
+    // Deduplicate identical price levels (e.g. M-Jack_0 == 3M-Oggy_0) so same close isn't double-counted full weight
+    const seenPrices: number[] = [primaryMacro.price];
     for (let i = 1; i < activeMacroCluster.length; i++) {
       const w = activeMacroCluster[i];
-      clusterBonus += 3.8 * TIMEFRAME_WEIGHTS[w.timeframe] * w.autourWeight;
+      const isDuplicatePrice = seenPrices.some(
+        (p) => Math.abs(p - w.price) / p < 0.0015
+      );
+      seenPrices.push(w.price);
+      const dupDiscount = isDuplicatePrice ? 0.45 : 1.0;
+      clusterBonus +=
+        3.2 * TIMEFRAME_WEIGHTS[w.timeframe] * w.autourWeight * dupDiscount;
     }
+    const distinctTfs = new Set(activeMacroCluster.map((w) => w.timeframe));
     const distinctKinds = new Set(activeMacroCluster.map((w) => w.kind));
+    if (distinctTfs.size >= 2) clusterBonus += 3;
     if (distinctKinds.size >= 2) clusterBonus += 3;
-    rawScore += Math.min(16, clusterBonus);
+    rawScore += Math.min(26, clusterBonus);
 
-    // 3. Étape 3 Volatility Turn (Signal Confirmé) + Oggy Reclaim + SAR (up to 14 pts)
+    // C. Étape 3 — Live Volatility Reversal & Momentum (max 22 pts)
     if (step3VolatilityReversal) {
-      rawScore += curvingTfs.length >= 2 ? 10 : 8;
+      rawScore += curvingTfs.length >= 2 ? 14 : 10;
     } else if (timeframes.D.bbCompressing) {
       rawScore += 4;
     }
-    if (reclaimedShortTermOggy) rawScore += 3;
+    if (reclaimedShortTermOggy) rawScore += 4;
 
-    const sarAligned = !isShortBias
+    const sarScore = !isShortBias
       ? timeframes.D.sarFlippedBullishRecently ||
-        timeframes.W.sarFlippedBullishRecently ||
-        timeframes.D.latestSAR?.isBullish
-        ? 3
+        timeframes.W.sarFlippedBullishRecently
+        ? 4
+        : timeframes.D.latestSAR?.isBullish
+        ? 2
         : 0
       : timeframes.D.sarFlippedBearishRecently ||
-        timeframes.W.sarFlippedBearishRecently ||
-        (timeframes.D.latestSAR && !timeframes.D.latestSAR.isBullish)
-      ? 3
+        timeframes.W.sarFlippedBearishRecently
+      ? 4
+      : timeframes.D.latestSAR && !timeframes.D.latestSAR.isBullish
+      ? 2
       : 0;
-    rawScore += sarAligned;
+    rawScore += sarScore;
 
-    // 4. Daily Bollinger Envelope Excess Bonus (setup1234.pine lines 374 & 376)
-    const minProbeLow = Math.min(...bullProbes.map((p) => p.low));
-    const maxProbeHigh = Math.max(...bearProbes.map((p) => p.high));
-    const hasDailyBBExcess = Boolean(
-      dBB &&
-        (!isShortBias
-          ? minProbeLow <= dBB.lower + dBB.stdDev * 0.2
-          : maxProbeHigh >= dBB.upper - dBB.stdDev * 0.2)
-    );
-    if (hasDailyBBExcess) rawScore += 6;
-
-    // 5. Étape 2 & 4 Targets + Full 4-Step Protocol Completion (up to 14 pts)
-    if (step2Didi) rawScore += 3;
-    if (step4MacroM20 && riskRewardRatio !== null) {
-      if (riskRewardRatio >= 2.0) rawScore += 7;
-      else if (riskRewardRatio >= 1.2) rawScore += 5;
-      else rawScore += 3;
+    // D. Étape 2 & 4 — Targets & Live Risk/Reward Ratio (max 18 pts, penalty if R:R < 1.0x)
+    if (step2Didi) rawScore += 4;
+    if (riskRewardRatio !== null) {
+      if (riskRewardRatio >= 3.0) rawScore += 14;
+      else if (riskRewardRatio >= 2.0) rawScore += 10;
+      else if (riskRewardRatio >= 1.3) rawScore += 6;
+      else if (riskRewardRatio < 0.9) rawScore -= 8;
     }
-    if (setupStep === 4) rawScore += 4;
+
+    // E. Opposing HTF Headwind Penalty (up to -12 pts when trapped between Green support & Red resistance)
+    if (opposingMacroCluster.length > 0) {
+      const oppPenalty = opposingMacroCluster.reduce(
+        (s, w) => s + 2.5 * TIMEFRAME_WEIGHTS[w.timeframe] * w.autourWeight,
+        0
+      );
+      rawScore -= Math.min(12, oppPenalty);
+    }
+
+    // Unconfirmed Phase 2 setups (Signal Orange — opposite BB still expanding) cannot exceed 68%
+    if (!step3VolatilityReversal) {
+      rawScore = Math.min(68, rawScore);
+    }
   } else {
-    // Off-wall / Surveillance ("WATCH"): capped well below active AT.S setups (< 45%)
+    // Off-wall ("WATCH" / Neutral): 0..38% max
     const bestOuter =
       (bullMacroWalls[0]?.autourWeight ?? 0) >=
       (bearMacroWalls[0]?.autourWeight ?? 0)
         ? bullMacroWalls[0]
         : bearMacroWalls[0];
     if (bestOuter && bestOuter.autourWeight > 0) {
-      rawScore += Math.round(bestOuter.autourWeight * 34);
+      rawScore += Math.round(bestOuter.autourWeight * 26);
     } else if (
       nearestAnyLine &&
       wallProximityPct !== null &&
-      wallProximityPct <= 5
+      wallProximityPct <= 4
     ) {
-      rawScore += Math.max(5, Math.round((1 - wallProximityPct / 5) * 20));
+      rawScore += Math.max(4, Math.round((1 - wallProximityPct / 4) * 16));
     }
-    if (step3VolatilityReversal) rawScore += 5;
-    if (step2Didi) rawScore += 3;
-    rawScore = Math.min(44, rawScore);
+    if (step3VolatilityReversal) rawScore += 4;
+    rawScore = Math.min(38, rawScore);
   }
 
-  const confidenceScore = Math.max(0, Math.min(100, Math.round(rawScore)));
+  const confidenceScore = Math.max(0, Math.min(98, Math.round(rawScore)));
+
+  // Selectivity gate: weak single-line brushes (< 55%) remain NEUTRAL / WATCH
+  // so 70-80% of a scanned universe stays neutral white rather than flooding green/red.
+  if (confidenceScore < 55) {
+    direction = 'NEUTRAL';
+    signalStatus = 'WATCH';
+    setupStep = 0;
+  }
+
+  const effectiveAtWall = isAtWall && direction !== 'NEUTRAL';
+  const effectiveSupportWall = isAtSupportWall && direction === 'LONG';
+  const effectiveResistanceWall = isAtResistanceWall && direction === 'SHORT';
 
   // Quantitative Reasoning in Clear AT.S Terminology
   const signalTag =
@@ -996,10 +985,10 @@ export function evaluateATSScreener(params: {
   let thesisHeadline = '';
   const reasoningBullets: string[] = [];
 
-  if (primaryMacro && isAtWall) {
+  if (primaryMacro && effectiveAtWall) {
     const ageNote =
       primaryMacro.triggerAgeBars > 0
-        ? ` [testé à J-${primaryMacro.triggerAgeBars} @ ${fmtNum(
+        ? ` [rebond J-${primaryMacro.triggerAgeBars} @ ${fmtNum(
             primaryMacro.triggerExtremePrice,
             category
           )}]`
@@ -1027,7 +1016,7 @@ export function evaluateATSScreener(params: {
       `Étape 1 (Macro "${primaryMacro.autourZone}") : Cours (${fmtNum(
         livePrice,
         category
-      )}) validé sur ${clusterList}${ageNote} sans invalidation.`
+      )}) sur ${clusterList}${ageNote}.`
     );
   } else {
     thesisHeadline = nearestAnyLine
@@ -1037,14 +1026,7 @@ export function evaluateATSScreener(params: {
       : 'Aucun niveau Oggy/Jack non-transpercé à proximité immédiate';
   }
 
-  if (tp1AlreadyReclaimed && timeframes.D.latestSMA7) {
-    reasoningBullets.push(
-      `Étape 2 (Dee-Dee / Bille 1 M7) : D-M7 (${fmtNum(
-        timeframes.D.latestSMA7.value,
-        category
-      )}) déjà reconquise ✓ — en route vers Bille 2 (M20).`
-    );
-  } else if (effectiveTargetTP1) {
+  if (effectiveTargetTP1) {
     reasoningBullets.push(
       `Étape 2 (Dee-Dee / Bille 1 M7) : Seuil court terme à ${
         effectiveTargetTP1.label
@@ -1056,8 +1038,8 @@ export function evaluateATSScreener(params: {
 
   reasoningBullets.push(
     `Étape 3 (Volatilité & Invalidation) : ${volatilitySignal} | Oggy/M7 1D ${
-      reclaimedShortTermOggy ? 'reconquis ✓' : 'en attente'
-    } | Stop-Loss strict sous Étape 1 @ ${fmtNum(stopLoss, category)} (${
+      reclaimedShortTermOggy ? 'aligné ✓' : 'en attente'
+    } | Stop-Loss strict @ ${fmtNum(stopLoss, category)} (${
       isShortBias ? '+' : '-'
     }${riskPct.toFixed(2)}%).`
   );
@@ -1070,7 +1052,7 @@ export function evaluateATSScreener(params: {
         macroTargetTP2.upsidePct >= 0 ? '+' : ''
       }${macroTargetTP2.upsidePct.toFixed(2)}%)${
         riskRewardRatio !== null
-          ? ` — Ratio R:R ${riskRewardRatio.toFixed(2)}x`
+          ? ` — Ratio R:R live ${riskRewardRatio.toFixed(2)}x`
           : ''
       }.`
     );
@@ -1085,9 +1067,9 @@ export function evaluateATSScreener(params: {
     change24hPct,
     direction,
     signalStatus,
-    isAtWall,
-    isAtSupportWall,
-    isAtResistanceWall,
+    isAtWall: effectiveAtWall,
+    isAtSupportWall: effectiveSupportWall,
+    isAtResistanceWall: effectiveResistanceWall,
     activeWallLabel,
     wallPrice,
     wallProximityPct,
@@ -1098,10 +1080,10 @@ export function evaluateATSScreener(params: {
     confidenceScore,
     setupStep,
     stepFlags: {
-      step1Wall: isAtWall,
-      step2Didi,
-      step3VolatilityReversal,
-      step4MacroM20,
+      step1Wall: effectiveAtWall,
+      step2Didi: effectiveAtWall && step2Didi,
+      step3VolatilityReversal: effectiveAtWall && step3VolatilityReversal,
+      step4MacroM20: effectiveAtWall && step4MacroM20,
     },
     volatilitySignal,
     stopLoss,
