@@ -254,15 +254,15 @@ function findHigherTimeframeSR(params: {
       }
     }
 
-    // 2. MM7 (SMA 7) — Green/rising for Support, Red/falling for Resistance
+    // 2. MM7 (SMA 7) — Green/rising for Support (<= livePrice), Red/falling for Resistance (>= livePrice)
     if (htfData.latestSMA7 && htfData.latestSMA7.value > 0) {
       const m7 = htfData.latestSMA7.value;
       if (
         side === 'BUY' &&
         htfData.latestSMA7.isGreen &&
-        m7 <= livePrice * 1.005
+        m7 <= livePrice
       ) {
-        const dist = Math.abs(livePrice - m7) / livePrice;
+        const dist = (livePrice - m7) / livePrice;
         if (dist <= HTF_SR_PROXIMITY_TOL) {
           matchedLevels.push({
             label: `${htf}-MM7`,
@@ -275,9 +275,9 @@ function findHigherTimeframeSR(params: {
       } else if (
         side === 'SELL' &&
         !htfData.latestSMA7.isGreen &&
-        m7 >= livePrice * 0.995
+        m7 >= livePrice
       ) {
-        const dist = Math.abs(m7 - livePrice) / livePrice;
+        const dist = (m7 - livePrice) / livePrice;
         if (dist <= HTF_SR_PROXIMITY_TOL) {
           matchedLevels.push({
             label: `${htf}-MM7`,
@@ -290,15 +290,15 @@ function findHigherTimeframeSR(params: {
       }
     }
 
-    // 3. MM20 (SMA 20) — Green/rising for Support, Red/falling for Resistance
+    // 3. MM20 (SMA 20) — Green/rising for Support (<= livePrice), Red/falling for Resistance (>= livePrice)
     if (htfData.latestSMA20 && htfData.latestSMA20.value > 0) {
       const m20 = htfData.latestSMA20.value;
       if (
         side === 'BUY' &&
         htfData.latestSMA20.isGreen &&
-        m20 <= livePrice * 1.005
+        m20 <= livePrice
       ) {
-        const dist = Math.abs(livePrice - m20) / livePrice;
+        const dist = (livePrice - m20) / livePrice;
         if (dist <= HTF_SR_PROXIMITY_TOL) {
           matchedLevels.push({
             label: `${htf}-MM20`,
@@ -311,9 +311,9 @@ function findHigherTimeframeSR(params: {
       } else if (
         side === 'SELL' &&
         !htfData.latestSMA20.isGreen &&
-        m20 >= livePrice * 0.995
+        m20 >= livePrice
       ) {
-        const dist = Math.abs(m20 - livePrice) / livePrice;
+        const dist = (m20 - livePrice) / livePrice;
         if (dist <= HTF_SR_PROXIMITY_TOL) {
           matchedLevels.push({
             label: `${htf}-MM20`,
@@ -326,15 +326,19 @@ function findHigherTimeframeSR(params: {
       }
     }
 
-    // 4. Wilder SAR AT.S — Bullish (below price) for Support, Bearish (above price) for Resistance
+    // 4. Wilder SAR AT.S — Strictly unbroken & unflipped on the current HTF bar:
+    //    Bullish (below price, bar low >= sar) for Support; Bearish (above price, bar high <= sar) for Resistance
+    const htfLastBar =
+      htfData.bars.length > 0 ? htfData.bars[htfData.bars.length - 1] : null;
     if (htfData.latestSAR && htfData.latestSAR.value > 0) {
       const sar = htfData.latestSAR.value;
       if (
         side === 'BUY' &&
         htfData.latestSAR.isBullish &&
-        sar <= livePrice * 1.005
+        sar <= livePrice &&
+        (!htfLastBar || htfLastBar.low >= sar)
       ) {
-        const dist = Math.abs(livePrice - sar) / livePrice;
+        const dist = (livePrice - sar) / livePrice;
         if (dist <= HTF_SR_PROXIMITY_TOL) {
           matchedLevels.push({
             label: `${htf}-SAR`,
@@ -347,9 +351,10 @@ function findHigherTimeframeSR(params: {
       } else if (
         side === 'SELL' &&
         !htfData.latestSAR.isBullish &&
-        sar >= livePrice * 0.995
+        sar >= livePrice &&
+        (!htfLastBar || htfLastBar.high <= sar)
       ) {
-        const dist = Math.abs(sar - livePrice) / livePrice;
+        const dist = (sar - livePrice) / livePrice;
         if (dist <= HTF_SR_PROXIMITY_TOL) {
           matchedLevels.push({
             label: `${htf}-SAR`,
@@ -362,13 +367,13 @@ function findHigherTimeframeSR(params: {
       }
     }
 
-    // 5. Higher-Timeframe Bollinger Bands — STRICT color polarity:
-    //    Green (rising) = Support (BUY only), Red (falling) = Resistance (SELL only)
+    // 5. Higher-Timeframe Bollinger Bands — STRICT color polarity & unbroken side:
+    //    Green (rising, <= livePrice) = Support (BUY only), Red (falling, >= livePrice) = Resistance (SELL only)
     if (htfData.latestBB) {
       const { upper, lower, upperGreen, lowerGreen } = htfData.latestBB;
       if (side === 'BUY') {
-        if (lower > 0 && lowerGreen && lower <= livePrice * 1.005) {
-          const distLive = Math.abs(livePrice - lower) / livePrice;
+        if (lower > 0 && lowerGreen && lower <= livePrice) {
+          const distLive = (livePrice - lower) / livePrice;
           const distExt = Math.abs(refExtremePrice - lower) / livePrice;
           if (
             distLive <= HTF_SR_PROXIMITY_TOL ||
@@ -383,8 +388,8 @@ function findHigherTimeframeSR(params: {
             });
           }
         }
-        if (upper > 0 && upperGreen && upper <= livePrice * 1.005) {
-          const distLive = Math.abs(livePrice - upper) / livePrice;
+        if (upper > 0 && upperGreen && upper <= livePrice) {
+          const distLive = (livePrice - upper) / livePrice;
           const distExt = Math.abs(refExtremePrice - upper) / livePrice;
           if (
             distLive <= HTF_SR_PROXIMITY_TOL ||
@@ -400,8 +405,8 @@ function findHigherTimeframeSR(params: {
           }
         }
       } else {
-        if (upper > 0 && !upperGreen && upper >= livePrice * 0.995) {
-          const distLive = Math.abs(upper - livePrice) / livePrice;
+        if (upper > 0 && !upperGreen && upper >= livePrice) {
+          const distLive = (upper - livePrice) / livePrice;
           const distExt = Math.abs(upper - refExtremePrice) / livePrice;
           if (
             distLive <= HTF_SR_PROXIMITY_TOL ||
@@ -416,8 +421,8 @@ function findHigherTimeframeSR(params: {
             });
           }
         }
-        if (lower > 0 && !lowerGreen && lower >= livePrice * 0.995) {
-          const distLive = Math.abs(lower - livePrice) / livePrice;
+        if (lower > 0 && !lowerGreen && lower >= livePrice) {
+          const distLive = (lower - livePrice) / livePrice;
           const distExt = Math.abs(lower - refExtremePrice) / livePrice;
           if (
             distLive <= HTF_SR_PROXIMITY_TOL ||
