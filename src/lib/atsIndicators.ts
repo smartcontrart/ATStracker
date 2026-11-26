@@ -100,10 +100,12 @@ export function computeAutourWeight(
 }
 
 /**
- * Evaluates structural polarity (Support vs Resistance), AT.S "Autour" halo,
- * and whether the recent price swing truly pierced ("transpercé") the baseline.
- * Matches TradingView AT.S / `setup1234.pine`: ancient oscillations from months/years
- * prior do NOT invalidate a level if the current swing approaches cleanly and holds "Autour".
+ * Evaluates structural polarity (Support vs Resistance) and STRICT unbroken integrity:
+ * - CRITICAL RULE: Do NOT render or use any Jack or Oggy line that has already been
+ *   pierced/broken by the live price.
+ *   - If a Green support is currently ABOVE livePrice (`levelPrice > currentPrice`), it is BROKEN.
+ *   - If a Red resistance is currently BELOW livePrice (`levelPrice < currentPrice`), it is BROKEN.
+ *   - If recent closes sliced across the level from one side to the other, it is BROKEN.
  */
 function evaluateBaselineIntegrity(
   bars: OHLCVBar[],
@@ -120,7 +122,6 @@ function evaluateBaselineIntegrity(
 } {
   const lastIdx = bars.length - 1;
   const maxOvershootPct = AUTOUR_OVERSHOOT_TOL_PCT[timeframe];
-  const tolFrac = maxOvershootPct / 100;
 
   const dailyConsistent =
     Boolean(recentDailyBars) &&
@@ -145,26 +146,25 @@ function evaluateBaselineIntegrity(
 
       const maxClose = Math.max(...recent.map((b) => b.close));
       const minClose = Math.min(...recent.map((b) => b.close));
-      const breakFloor = levelPrice * (1 - tolFrac);
-      const breakCeiling = levelPrice * (1 + tolFrac);
 
-      // Sliced straight across level in recent sessions ("transpercé — ne fait plus effet")
+      // Sliced straight across level in recent sessions
       const slicedThroughCloses =
-        maxClose > breakCeiling && minClose < breakFloor;
+        maxClose > levelPrice * 1.002 && minClose < levelPrice * 0.998;
 
       const structuralSupport =
         priorAvgClose > levelPrice ||
         (priorAvgClose === levelPrice && currentPrice >= levelPrice);
 
       if (structuralSupport) {
+        // Strict rule: if Green support is currently ABOVE livePrice (currentPrice < levelPrice), it is BROKEN!
         const piercedDown =
-          currentPrice < breakFloor ||
+          currentPrice < levelPrice ||
           slicedThroughCloses ||
-          minClose < breakFloor;
+          minClose < levelPrice * 0.998;
 
         if (piercedDown) {
           return {
-            polarity: resolveATSPolarity(currentPrice, levelPrice),
+            polarity: 'GREEN',
             isPierced: true,
             autourZone: 'PIERCED',
             autourWeight: 0,
@@ -184,14 +184,15 @@ function evaluateBaselineIntegrity(
           autourWeight: weight,
         };
       } else {
+        // Strict rule: if Red resistance is currently BELOW livePrice (currentPrice > levelPrice), it is BROKEN!
         const piercedUp =
-          currentPrice > breakCeiling ||
+          currentPrice > levelPrice ||
           slicedThroughCloses ||
-          maxClose > breakCeiling;
+          maxClose > levelPrice * 1.002;
 
         if (piercedUp) {
           return {
-            polarity: resolveATSPolarity(currentPrice, levelPrice),
+            polarity: 'RED',
             isPierced: true,
             autourZone: 'PIERCED',
             autourWeight: 0,
@@ -214,7 +215,7 @@ function evaluateBaselineIntegrity(
     }
   }
 
-  // Fallback on single-timeframe series (or synthetic unit test bars)
+  // Fallback on single-timeframe series
   const recentStart = Math.max(refIdx + 1, lastIdx - 3);
   const priorBars = bars.slice(recentStart, lastIdx);
   const anchor =
@@ -226,14 +227,10 @@ function evaluateBaselineIntegrity(
     anchor > levelPrice || (anchor === levelPrice && currentPrice >= levelPrice);
 
   if (structuralSupport) {
-    const breakFloor = levelPrice * (1 - tolFrac);
-    let piercedDown =
-      currentPrice < breakFloor ||
-      bars[lastIdx].low < levelPrice * (1 - tolFrac * 1.25);
-
+    let piercedDown = currentPrice < levelPrice;
     if (!piercedDown) {
       for (const b of priorBars) {
-        if (b.close < breakFloor) {
+        if (b.close < levelPrice) {
           piercedDown = true;
           break;
         }
@@ -242,7 +239,7 @@ function evaluateBaselineIntegrity(
 
     if (piercedDown) {
       return {
-        polarity: resolveATSPolarity(currentPrice, levelPrice),
+        polarity: 'GREEN',
         isPierced: true,
         autourZone: 'PIERCED',
         autourWeight: 0,
@@ -261,14 +258,10 @@ function evaluateBaselineIntegrity(
       autourWeight: weight,
     };
   } else {
-    const breakCeiling = levelPrice * (1 + tolFrac);
-    let piercedUp =
-      currentPrice > breakCeiling ||
-      bars[lastIdx].high > levelPrice * (1 + tolFrac * 1.25);
-
+    let piercedUp = currentPrice > levelPrice;
     if (!piercedUp) {
       for (const b of priorBars) {
-        if (b.close > breakCeiling) {
+        if (b.close > levelPrice) {
           piercedUp = true;
           break;
         }
@@ -277,7 +270,7 @@ function evaluateBaselineIntegrity(
 
     if (piercedUp) {
       return {
-        polarity: resolveATSPolarity(currentPrice, levelPrice),
+        polarity: 'RED',
         isPierced: true,
         autourZone: 'PIERCED',
         autourWeight: 0,

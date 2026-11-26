@@ -13,9 +13,19 @@ import type {
 } from 'lightweight-charts';
 import type {
   ATSBaseline,
+  OHLCVBar,
   ParabolicSARPoint,
   TimeframeSetup1234,
 } from '@/types/ats';
+
+interface ScreenOHLCBar {
+  x: number;
+  openY: number;
+  highY: number;
+  lowY: number;
+  closeY: number;
+  tickWidth: number;
+}
 
 interface ScreenSARPoint {
   x: number;
@@ -57,17 +67,20 @@ type CanvasTarget = {
 };
 
 class ParabolicSARPaneRenderer implements ISeriesPrimitivePaneRenderer {
+  private bars: ScreenOHLCBar[];
   private points: ScreenSARPoint[];
   private origins: ScreenOriginMarker[];
   private rays: ScreenHorizontalRay[];
   private setupOverlay: ScreenSetupOverlay | null;
 
   constructor(
+    bars: ScreenOHLCBar[],
     points: ScreenSARPoint[],
     origins: ScreenOriginMarker[],
     rays: ScreenHorizontalRay[],
     setupOverlay: ScreenSetupOverlay | null
   ) {
+    this.bars = bars;
     this.points = points;
     this.origins = origins;
     this.rays = rays;
@@ -124,10 +137,30 @@ class ParabolicSARPaneRenderer implements ISeriesPrimitivePaneRenderer {
 
         if (ray.hasVisibleOrigin) {
           context.beginPath();
-          context.arc(ray.xStart, ray.y, 2.6, 0, Math.PI * 2);
+          context.arc(ray.xStart, ray.y, 2.0, 0, Math.PI * 2);
           context.fillStyle = ray.color;
           context.fill();
         }
+      }
+
+      // 1b. Draw Crisp Medium-Thin Black OHLC Price Bars (lineWidth: 1.35px media space)
+      if (this.bars.length > 0) {
+        context.save();
+        context.strokeStyle = '#000000';
+        context.lineWidth = 1.35;
+        context.lineCap = 'butt';
+        context.beginPath();
+        for (const bar of this.bars) {
+          const x = Math.round(bar.x) + 0.5;
+          context.moveTo(x, bar.highY);
+          context.lineTo(x, bar.lowY);
+          context.moveTo(x - bar.tickWidth, bar.openY);
+          context.lineTo(x, bar.openY);
+          context.moveTo(x, bar.closeY);
+          context.lineTo(x + bar.tickWidth, bar.closeY);
+        }
+        context.stroke();
+        context.restore();
       }
 
       // 2. Draw "SAR Wilder AT.S" circles (tmpSAR[1], green if tendance[1]==1 else red)
@@ -191,6 +224,7 @@ class ParabolicSARPaneRenderer implements ISeriesPrimitivePaneRenderer {
 
 class ParabolicSARPaneView implements ISeriesPrimitivePaneView {
   private source: ParabolicSARDotsPrimitive;
+  private screenBars: ScreenOHLCBar[] = [];
   private screenPoints: ScreenSARPoint[] = [];
   private screenOrigins: ScreenOriginMarker[] = [];
   private screenRays: ScreenHorizontalRay[] = [];
@@ -211,6 +245,7 @@ class ParabolicSARPaneView implements ISeriesPrimitivePaneView {
     const setup = this.source.getSetup1234();
 
     if (!chart || !series) {
+      this.screenBars = [];
       this.screenPoints = [];
       this.screenOrigins = [];
       this.screenRays = [];
@@ -220,6 +255,46 @@ class ParabolicSARPaneView implements ISeriesPrimitivePaneView {
 
     const timeScale = chart.timeScale();
     const chartWidth = timeScale.width();
+
+    // 0. Project Medium-Thin OHLC Price Bars (lineWidth: 1.35px)
+    const rawBars = this.source.getBars();
+    const nextBars: ScreenOHLCBar[] = [];
+    if (rawBars.length > 0) {
+      let barSpacing = 10;
+      if (rawBars.length >= 2) {
+        const x1 = timeScale.timeToCoordinate(
+          rawBars[rawBars.length - 1].time as Time
+        );
+        const x0 = timeScale.timeToCoordinate(
+          rawBars[rawBars.length - 2].time as Time
+        );
+        if (x1 !== null && x0 !== null && x1 > x0) {
+          barSpacing = x1 - x0;
+        }
+      }
+      const tickWidth = Math.max(2.5, Math.min(5.5, barSpacing * 0.36));
+
+      for (let i = 0; i < rawBars.length; i++) {
+        const b = rawBars[i];
+        const x = timeScale.timeToCoordinate(b.time as Time);
+        if (x === null || (chartWidth > 0 && (x < -12 || x > chartWidth + 12))) {
+          continue;
+        }
+        const openY = series.priceToCoordinate(b.open);
+        const highY = series.priceToCoordinate(b.high);
+        const lowY = series.priceToCoordinate(b.low);
+        const closeY = series.priceToCoordinate(b.close);
+        if (
+          openY !== null &&
+          highY !== null &&
+          lowY !== null &&
+          closeY !== null
+        ) {
+          nextBars.push({ x, openY, highY, lowY, closeY, tickWidth });
+        }
+      }
+    }
+    this.screenBars = nextBars;
 
     // 1. Project Vertical Grey Dashed Origin Lines (Jack t-20 & Oggy t-7)
     const nextOrigins: ScreenOriginMarker[] = [];
@@ -248,12 +323,20 @@ class ParabolicSARPaneView implements ISeriesPrimitivePaneView {
         ? [6, 4]
         : [2, 3];
 
+      // Oggy lines MUST be rendered in BLUE; Jack lines retain Green/Red polarity; all lines thin (lineWidth: 1)
+      const rayColor =
+        line.family === 'Oggy'
+          ? '#2563eb'
+          : line.polarity === 'GREEN'
+          ? '#16a34a'
+          : '#dc2626';
+
       nextRays.push({
         xStart,
         hasVisibleOrigin,
         y,
-        color: line.polarity === 'GREEN' ? '#16a34a' : '#dc2626',
-        lineWidth: isZero ? 2 : 1.2,
+        color: rayColor,
+        lineWidth: 1,
         dash,
       });
     }
@@ -334,6 +417,7 @@ class ParabolicSARPaneView implements ISeriesPrimitivePaneView {
 
   renderer(): ISeriesPrimitivePaneRenderer | null {
     if (
+      this.screenBars.length === 0 &&
       this.screenPoints.length === 0 &&
       this.screenOrigins.length === 0 &&
       this.screenRays.length === 0 &&
@@ -342,6 +426,7 @@ class ParabolicSARPaneView implements ISeriesPrimitivePaneView {
       return null;
     }
     return new ParabolicSARPaneRenderer(
+      this.screenBars,
       this.screenPoints,
       this.screenOrigins,
       this.screenRays,
@@ -354,6 +439,7 @@ export class ParabolicSARDotsPrimitive implements ISeriesPrimitive<Time> {
   private chart: IChartApiBase<Time> | null = null;
   private series: ISeriesApi<SeriesType, Time> | null = null;
   private requestUpdate: (() => void) | null = null;
+  private bars: OHLCVBar[] = [];
   private data: ParabolicSARPoint[] = [];
   private visible = true;
   private originTimes: Array<{ time: string; tag: string }> = [];
@@ -383,6 +469,7 @@ export class ParabolicSARDotsPrimitive implements ISeriesPrimitive<Time> {
   }
 
   setData(params: {
+    bars: OHLCVBar[];
     sarPoints: ParabolicSARPoint[];
     showSAR: boolean;
     originTimes: Array<{ time: string; tag: string }>;
@@ -391,6 +478,7 @@ export class ParabolicSARDotsPrimitive implements ISeriesPrimitive<Time> {
     latestBarTime: string | null;
     showSetupOverlay: boolean;
   }): void {
+    this.bars = params.bars;
     this.data = params.sarPoints;
     this.visible = params.showSAR;
     this.originTimes = params.originTimes;
@@ -465,6 +553,10 @@ export class ParabolicSARDotsPrimitive implements ISeriesPrimitive<Time> {
 
   getSeries(): ISeriesApi<SeriesType, Time> | null {
     return this.series;
+  }
+
+  getBars(): OHLCVBar[] {
+    return this.bars;
   }
 
   getData(): ParabolicSARPoint[] {

@@ -45,13 +45,19 @@ export const TIMEFRAME_LABELS: Record<Timeframe, string> = {
 export type ATSPolarity = 'GREEN' | 'RED';
 export type SetupDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
 export type SetupConfirmationStatus = 'CONFIRMED' | 'CANDIDATE' | 'WATCH';
-export type TradeActionOutput =
-  | 'STRONG BUY'
-  | 'STRONG SELL'
-  | 'BUY'
-  | 'SELL'
-  | 'WATCHLIST'
-  | 'IGNORE / INVALIDATED';
+
+/**
+ * Chronological ATS State Detection Engine statuses (Setup 1-2-3-4):
+ * - STEP 2: REVERSAL CONFIRMED (Conservative — opposite Daily BB hooked inward on cluster)
+ * - STEP 1: THE WALL (Aggressive — sniper entry on cluster while Daily BB still widening in Phase 2)
+ * - NO SETUP (Failed Volatility Gatekeeper checks 1, 2, or 3)
+ * - INVALIDATED (Knockout Rule — livePrice breached established Didi by > 1%)
+ */
+export type AtsState =
+  | 'INVALIDATED'
+  | 'NO SETUP'
+  | 'STEP 1: THE WALL'
+  | 'STEP 2: REVERSAL CONFIRMED';
 
 export type JackLineKey = 'Jack_Minus1' | 'Jack_0' | 'Jack_Plus1';
 export type OggyLineKey = 'Oggy_Minus1' | 'Oggy_0' | 'Oggy_Plus1';
@@ -83,15 +89,13 @@ export interface ATSBaseline {
   offset: number;
   /** Historical closing price at t - offset */
   price: number;
-  /** GREEN = Support (currentPrice >= price), RED = Resistance (currentPrice < price) */
+  /** GREEN = Support (price <= livePrice), RED = Resistance (price >= livePrice) */
   polarity: ATSPolarity;
-  /** True if price pierced decisively beyond the AT.S "Autour" tolerance (no longer active) */
+  /** True if pierced/broken by livePrice (excluded from UI and calculations) */
   isPierced: boolean;
-  /** Elastic AT.S "Autour" classification around the baseline */
   autourZone: 'EXACT' | 'APPROACH' | 'OVERSHOOT_AUTOUR' | 'DISTANT' | 'PIERCED';
-  /** Continuous 0..1 quality weight in the AT.S "Autour" model */
   autourWeight: number;
-  /** True if unpierced AND price is within visual approach range on this timeframe */
+  /** True ONLY if unpierced AND within visual proximity range on this timeframe */
   shouldPlotOnChart: boolean;
   /** Historical bar date at t - offset */
   referenceTime: string;
@@ -119,7 +123,6 @@ export interface OggyMatrix {
 export interface MovingAveragePoint {
   time: string;
   value: number;
-  /** True when current Price >= MA or MA is rising (AT.S green vs red polarity) */
   isGreen: boolean;
 }
 
@@ -159,7 +162,6 @@ export interface DidiTarget {
     | 'HTF_BB_Lower'
     | 'SMA7'
     | 'SMA20';
-  /** Absolute move % toward target from livePrice */
   upsidePct: number;
 }
 
@@ -169,9 +171,7 @@ export interface TimeframeSetup1234 {
   signalBarTime: string | null;
   signalPriceLevel: number | null;
   confluenceText: string;
-  /** Objective 1: SMA 7 (first black target dot / bille noire) */
   tp1Sma7: number | null;
-  /** Objective 2: SMA 20 (second black target dot / bille noire) */
   tp2Sma20: number | null;
   tp1Hit: boolean;
   tp2Hit: boolean;
@@ -188,9 +188,7 @@ export interface TimeframeATSData {
   latestSMA20: MovingAveragePoint | null;
   bollingerBands: BollingerBandPoint[];
   latestBB: BollingerBandPoint | null;
-  /** Step 3 check: whether the opposite Bollinger Band has started curving inwards */
   oppositeBandCurvingInwards: boolean;
-  /** Overall Bollinger bandwidth contraction on latest bar */
   bbCompressing: boolean;
   parabolicSAR: ParabolicSARPoint[];
   latestSAR: ParabolicSARPoint | null;
@@ -209,16 +207,19 @@ export interface MacroTargetTP2 {
 
 export interface TimeframeHorizonSummary {
   timeframe: Timeframe;
-  /** Count of UNPIERCED Green Support baselines */
+  /** Count of UNBROKEN Green Support baselines */
   greenCount: number;
-  /** Count of UNPIERCED Red Resistance baselines */
+  /** Count of UNBROKEN Red Resistance baselines */
   redCount: number;
+  /** Count of UNBROKEN Oggy baselines (rendered in Blue) */
+  oggyCount: number;
   piercedCount: number;
   greenLines: string[];
   redLines: string[];
   wallTouches: Array<{
     shortName: string;
     label: string;
+    family: 'Jack' | 'Oggy';
     polarity: ATSPolarity;
     price: number;
     absDistancePct: number;
@@ -229,6 +230,23 @@ export interface TimeframeHorizonSummary {
   m20Price: number | null;
 }
 
+export interface AtsStateDetectionResult {
+  state: AtsState;
+  setupSide: 'BUY' | 'SELL' | 'NONE';
+  ClusterDensityCount: number;
+  RiskToDidiPercentage: number;
+  RiskToDidi: number;
+  didiPrice: number;
+  clusterLines: ATSBaseline[];
+  gatekeeperChecks: {
+    didNotKnockout: boolean;
+    check1Phase2Diverging: boolean;
+    check2OuterBandPush: boolean;
+    check3OnHtfCluster: boolean;
+    check4Phase3HookedInward: boolean;
+  };
+}
+
 export interface ScreenerResult {
   symbol: string;
   displaySymbol: string;
@@ -236,9 +254,19 @@ export interface ScreenerResult {
   category: AssetCategory;
   livePrice: number;
   change24hPct: number;
+  /** Resulting chronological ATS State */
+  atsState: AtsState;
+  setupSide: 'BUY' | 'SELL' | 'NONE';
   direction: SetupDirection;
-  /** CONFIRMED = Signal Vert/Rouge (opposite BB turned), CANDIDATE = Signal Orange, WATCH = off-wall */
   signalStatus: SetupConfirmationStatus;
+  /** Number of unbroken HTF Jack/Oggy lines sitting within 1% of livePrice */
+  ClusterDensityCount: number;
+  /** Percentage distance between livePrice and the Didi stop-loss */
+  RiskToDidi: number;
+  RiskToDidiPercentage: number;
+  /** Didi extreme stop-loss price reached during the Phase 2 BB expansion */
+  didiPrice: number;
+  gatekeeperChecks: AtsStateDetectionResult['gatekeeperChecks'];
   isAtWall: boolean;
   isAtSupportWall: boolean;
   isAtResistanceWall: boolean;
@@ -249,34 +277,6 @@ export interface ScreenerResult {
   confluentResistanceLines: ATSBaseline[];
   nearestGreenSupport: ATSBaseline | null;
   nearestRedResistance: ATSBaseline | null;
-  /** Mode A (Aggressive) Base Score (0..100): Pillar 1 Cluster (0..60) + Pillar 2 Didi Risk (0..40), or 0 if knocked out */
-  confidenceScore: number;
-  baseScore: number;
-  /** Mode B (Conservative) Final Score (0..100): Base Score if Phase 3 confirmed, else max(0, Base Score - 25) */
-  conservativeScore: number;
-  /** Pillar 1: Higher-Timeframe Support/Resistance Cluster score (0..60) */
-  pillar1ClusterScore: number;
-  /** Pillar 2: Proximity to Didi stop-loss risk score (0, 20, or 40) */
-  pillar2RiskScore: number;
-  /** Didi stop-loss price (lowest price of drop for Buy, highest price of rally for Sell) */
-  didiStopPrice: number;
-  /** Percentage distance between current livePrice and didiStopPrice */
-  didiDistancePct: number;
-  /** True if current price breached an established Didi stop-loss level (immediate score = 0) */
-  isKnockedOut: boolean;
-  /** True if opposite Bollinger Band is hooking inward towards price (Phase 3 confirmed) */
-  isPhase3: boolean;
-  /** Trade recommendation for Mode A (Aggressive — Toggle OFF) */
-  tradeActionAggressive: TradeActionOutput;
-  /** Trade recommendation for Mode B (Conservative — Toggle ON) */
-  tradeActionConservative: TradeActionOutput;
-  setupStep: 0 | 1 | 2 | 3 | 4;
-  stepFlags: {
-    step1Wall: boolean;
-    step2Didi: boolean;
-    step3VolatilityReversal: boolean;
-    step4MacroM20: boolean;
-  };
   volatilitySignal: string;
   stopLoss: number;
   riskPct: number;

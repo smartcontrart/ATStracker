@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { ChartsView } from '@/components/charts/ChartsView';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { ScreenerView } from '@/components/screener/ScreenerView';
+import { compareScreenerResults } from '@/lib/atsScreener';
 import { type ActiveDashboardView, useATSStore } from '@/store/useATSStore';
 import type { AssetCategory, ScreenerResult } from '@/types/ats';
 
@@ -141,8 +142,8 @@ export const ATSDashboard: React.FC = () => {
       setActiveCategory(nextCategory);
 
       if (activeView === 'charts') {
-        const topScanned = [...screenerResults[nextCategory]].sort(
-          (a, b) => b.confidenceScore - a.confidenceScore
+        const topScanned = [...screenerResults[nextCategory]].sort((a, b) =>
+          compareScreenerResults(a, b, 'STATE')
         )[0];
         const fallbackSymbol =
           topScanned?.symbol ||

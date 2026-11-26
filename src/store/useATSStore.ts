@@ -3,10 +3,17 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { UNIVERSE_PRESETS } from '@/lib/assetUniverses';
+import { compareScreenerResults, type ScreenerSortKey } from '@/lib/atsScreener';
 import type { AssetCategory, ScreenerResult } from '@/types/ats';
 
 export type ActiveDashboardView = 'screener' | 'charts';
 export type DirectionFilter = 'ALL' | 'LONG' | 'SHORT';
+export type AtsStateFilter =
+  | 'ALL'
+  | 'ACTIVE'
+  | 'STEP2'
+  | 'STEP1'
+  | 'INVALIDATED';
 
 export interface ATSUIPreferences {
   showJack: boolean;
@@ -16,9 +23,9 @@ export interface ATSUIPreferences {
   showDidi: boolean;
   syncCrosshair: boolean;
   onlyWallCandidates: boolean;
-  /** Execution Toggle: false = Mode A (Aggressive, Toggle OFF), true = Mode B (Conservative Phase 3 required, Toggle ON) */
-  requirePhase3Confirmation: boolean;
   directionFilter: DirectionFilter;
+  stateFilter: AtsStateFilter;
+  sortBy: ScreenerSortKey;
 }
 
 export interface ScanProgressState {
@@ -36,14 +43,17 @@ export const DEFAULT_WATCHLISTS: Record<AssetCategory, string[]> = {
     'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT', 'LINKUSDT', 'SUIUSDT',
   ],
   forex: [
-    'EURUSD=X', 'GBPUSD=X', 'USDJPY=X', 'AUDUSD=X', 'USDCAD=X',
-    'USDCHF=X', 'NZDUSD=X', 'USDMXN=X', 'USDSGD=X', 'EURJPY=X',
+    'DX-Y.NYB', 'EURUSD=X', 'GBPUSD=X', 'USDJPY=X', 'AUDUSD=X',
+    'USDCAD=X', 'USDCHF=X', 'NZDUSD=X', 'USDMXN=X', 'EURJPY=X',
   ],
 };
 
 function formatWatchlistTicker(raw: string, category: AssetCategory): string {
   const clean = raw.trim().toUpperCase();
   if (!clean) return '';
+
+  if (clean === 'DXY' || clean === 'DX-Y.NYB') return 'DX-Y.NYB';
+  if (clean === 'DJI' || clean === '^DJI') return '^DJI';
 
   if (category === 'forex') {
     const alpha = clean.replace(/=X$/i, '').replace(/[^A-Z]/g, '');
@@ -56,21 +66,19 @@ function formatWatchlistTicker(raw: string, category: AssetCategory): string {
     return stripped.endsWith('USDT') ? stripped : `${stripped}USDT`;
   }
 
-  return clean.replace(/\./g, '-');
+  return clean.replace(/^([A-Z0-9]+)\.([AB])$/, '$1-$2');
 }
 
 function sortScreenerRows(rows: ScreenerResult[]): ScreenerResult[] {
-  return [...rows].sort((a, b) => {
-    if (b.confidenceScore !== a.confidenceScore) {
-      return b.confidenceScore - a.confidenceScore;
-    }
-    if (a.isAtWall !== b.isAtWall) return a.isAtWall ? -1 : 1;
-    return b.setupStep - a.setupStep;
-  });
+  return [...rows].sort((a, b) => compareScreenerResults(a, b, 'STATE'));
 }
 
+type BooleanPreferenceKey = Exclude<
+  keyof ATSUIPreferences,
+  'directionFilter' | 'stateFilter' | 'sortBy'
+>;
+
 interface ATSStoreState {
-  // Persisted User State
   watchlists: Record<AssetCategory, string[]>;
   universePreset: Record<AssetCategory, string>;
   activeView: ActiveDashboardView;
@@ -81,17 +89,14 @@ interface ATSStoreState {
   };
   uiPreferences: ATSUIPreferences;
 
-  // Ephemeral Runtime Screener Cache
   screenerResults: Record<AssetCategory, ScreenerResult[]>;
   screenerLoading: Record<AssetCategory, boolean>;
   scanProgress: Record<AssetCategory, ScanProgressState>;
   screenerErrors: Record<AssetCategory, string | null>;
   lastScannedAt: Record<AssetCategory, string | null>;
 
-  // Helpers
   getActiveSymbolsForCategory: (category: AssetCategory) => string[];
 
-  // Actions
   setActiveView: (view: ActiveDashboardView) => void;
   setActiveCategory: (category: AssetCategory) => void;
   setUniversePreset: (category: AssetCategory, presetId: string) => void;
@@ -100,13 +105,16 @@ interface ATSStoreState {
   addTicker: (rawTicker: string, category: AssetCategory) => string | null;
   removeTicker: (symbol: string, category: AssetCategory) => void;
   resetWatchlist: (category: AssetCategory) => void;
-  toggleUIPreference: (
-    key: Exclude<keyof ATSUIPreferences, 'directionFilter'>
-  ) => void;
+  toggleUIPreference: (key: BooleanPreferenceKey) => void;
   setDirectionFilter: (dir: DirectionFilter) => void;
+  setStateFilter: (filter: AtsStateFilter) => void;
+  setSortBy: (sortKey: ScreenerSortKey) => void;
 
-  // Progressive batch screener setters
-  startCategoryScan: (category: AssetCategory, total: number, clearExisting?: boolean) => void;
+  startCategoryScan: (
+    category: AssetCategory,
+    total: number,
+    clearExisting?: boolean
+  ) => void;
   appendScreenerBatch: (
     category: AssetCategory,
     batchResults: ScreenerResult[],
@@ -140,8 +148,9 @@ export const useATSStore = create<ATSStoreState>()(
         showDidi: true,
         syncCrosshair: true,
         onlyWallCandidates: false,
-        requirePhase3Confirmation: false,
         directionFilter: 'ALL',
+        stateFilter: 'ALL',
+        sortBy: 'STATE',
       },
 
       screenerResults: {
@@ -179,7 +188,6 @@ export const useATSStore = create<ATSStoreState>()(
         if (!presetObj || presetObj.tickers === null) {
           return state.watchlists[category];
         }
-        // Merge user's custom added tickers at the front so custom additions always appear even in S&P 500 / Top 100 mode!
         return Array.from(
           new Set([...state.watchlists[category], ...presetObj.tickers])
         );
@@ -269,6 +277,22 @@ export const useATSStore = create<ATSStoreState>()(
           },
         })),
 
+      setStateFilter: (stateFilter) =>
+        set((state) => ({
+          uiPreferences: {
+            ...state.uiPreferences,
+            stateFilter,
+          },
+        })),
+
+      setSortBy: (sortBy) =>
+        set((state) => ({
+          uiPreferences: {
+            ...state.uiPreferences,
+            sortBy,
+          },
+        })),
+
       startCategoryScan: (category, total, clearExisting = true) =>
         set((state) => ({
           screenerLoading: {
@@ -353,7 +377,7 @@ export const useATSStore = create<ATSStoreState>()(
         })),
     }),
     {
-      name: 'ats-mtf-screener-storage-v3',
+      name: 'ats-mtf-screener-storage-v4',
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         watchlists: state.watchlists,

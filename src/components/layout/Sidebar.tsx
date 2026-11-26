@@ -1,22 +1,14 @@
 'use client';
 
 import React, { useMemo } from 'react';
-import {
-  BarChart3,
-  BookOpen,
-  Compass,
-  Layers,
-  Loader2,
-  Radar,
-  Zap,
-} from 'lucide-react';
+import { BarChart3, Compass, Loader2, Radar, Zap } from 'lucide-react';
 import { GlobalAssetLookup } from '@/components/search/GlobalAssetLookup';
 import { Badge } from '@/components/ui/badge';
 import { MarketToggle } from '@/components/ui/market-toggle';
-import { resolveExecutionModeResult } from '@/lib/atsScreener';
+import { compareScreenerResults } from '@/lib/atsScreener';
 import { cn } from '@/lib/utils';
 import { type ActiveDashboardView, useATSStore } from '@/store/useATSStore';
-import type { AssetCategory } from '@/types/ats';
+import type { AssetCategory, AtsState } from '@/types/ats';
 
 interface SidebarProps {
   onNavigateView: (view: ActiveDashboardView) => void;
@@ -25,10 +17,18 @@ interface SidebarProps {
 }
 
 const CATEGORY_HIT_TITLES: Record<AssetCategory, string> = {
-  stocks: 'Top Stock Hit List',
-  crypto: 'Top Crypto Hit List',
-  forex: 'Top Forex Hit List',
+  stocks: 'Top Stock Setups',
+  crypto: 'Top Crypto Setups',
+  forex: 'Top FX Setups',
 };
+
+function shortStateTag(state: AtsState | null, density: number): string {
+  if (!state) return '—';
+  if (state === 'STEP 2: REVERSAL CONFIRMED') return `STEP 2 · ${density}L`;
+  if (state === 'STEP 1: THE WALL') return `STEP 1 · ${density}L`;
+  if (state === 'INVALIDATED') return 'INVAL';
+  return density > 0 ? `${density}L` : 'NONE';
+}
 
 export const Sidebar: React.FC<SidebarProps> = ({
   onNavigateView,
@@ -45,57 +45,52 @@ export const Sidebar: React.FC<SidebarProps> = ({
     uiPreferences,
   } = useATSStore();
 
-  const requirePhase3 = Boolean(uiPreferences.requirePhase3Confirmation);
-
-  const countActionable = (list: typeof screenerResults.stocks) =>
+  const countActiveSetups = (list: typeof screenerResults.stocks) =>
     list.filter(
-      (r) => resolveExecutionModeResult(r, requirePhase3).finalScore >= 70
+      (r) =>
+        r.atsState === 'STEP 1: THE WALL' ||
+        r.atsState === 'STEP 2: REVERSAL CONFIRMED'
     ).length;
 
-  const totalWallHits =
-    countActionable(screenerResults.stocks) +
-    countActionable(screenerResults.crypto) +
-    countActionable(screenerResults.forex);
+  const totalActiveSetups =
+    countActiveSetups(screenerResults.stocks) +
+    countActiveSetups(screenerResults.crypto) +
+    countActiveSetups(screenerResults.forex);
 
-  const selectedAssetScore = useMemo(() => {
+  const selectedAssetState = useMemo(() => {
     const found = screenerResults[selectedAsset.category].find(
       (r) => r.symbol === selectedAsset.symbol
     );
     return found
-      ? resolveExecutionModeResult(found, requirePhase3).finalScore
+      ? shortStateTag(found.atsState, found.ClusterDensityCount)
       : null;
-  }, [requirePhase3, screenerResults, selectedAsset.category, selectedAsset.symbol]);
+  }, [screenerResults, selectedAsset.category, selectedAsset.symbol]);
 
   const sidebarItems = useMemo(() => {
-    const scanned = [...screenerResults[activeCategory]].sort(
-      (a, b) =>
-        resolveExecutionModeResult(b, requirePhase3).finalScore -
-        resolveExecutionModeResult(a, requirePhase3).finalScore
+    const scanned = [...screenerResults[activeCategory]].sort((a, b) =>
+      compareScreenerResults(a, b, uiPreferences.sortBy || 'STATE')
     );
     if (scanned.length > 0) {
-      return scanned.slice(0, 25).map((r) => {
-        const modeRes = resolveExecutionModeResult(r, requirePhase3);
-        return {
-          symbol: r.symbol,
-          displaySymbol: r.displaySymbol,
-          score: modeRes.finalScore,
-          tradeAction: modeRes.tradeAction,
-          isAtWall: r.isAtWall,
-          direction: r.direction,
-          wallLabel: r.activeWallLabel,
-        };
-      });
+      return scanned.slice(0, 25).map((r) => ({
+        symbol: r.symbol,
+        displaySymbol: r.displaySymbol,
+        atsState: r.atsState as AtsState | null,
+        density: r.ClusterDensityCount,
+        riskToDidi: r.RiskToDidi,
+        direction: r.direction,
+        wallLabel: r.activeWallLabel,
+      }));
     }
     return watchlists[activeCategory].slice(0, 20).map((sym) => ({
       symbol: sym,
       displaySymbol: sym.replace(/=X$/, ''),
-      score: null as number | null,
-      tradeAction: 'WATCHLIST' as const,
-      isAtWall: false,
+      atsState: null as AtsState | null,
+      density: 0,
+      riskToDidi: 0,
       direction: 'NEUTRAL' as const,
       wallLabel: '',
     }));
-  }, [activeCategory, requirePhase3, screenerResults, watchlists]);
+  }, [activeCategory, screenerResults, uiPreferences.sortBy, watchlists]);
 
   return (
     <aside className="flex w-full flex-col border-b border-slate-200 bg-white lg:sticky lg:top-0 lg:h-screen lg:w-64 xl:w-72 lg:shrink-0 lg:border-b-0 lg:border-r">
@@ -111,7 +106,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 ATS ENGINE
               </span>
               <span className="rounded bg-emerald-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-emerald-800">
-                MTF
+                STATE
               </span>
             </div>
             <p className="text-[11px] text-slate-500">Action Trading System</p>
@@ -148,14 +143,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
           <span className="flex items-center gap-2.5">
             <Radar className="h-4 w-4" />
-            <span>Top Candidates</span>
+            <span>ATS State Screener</span>
           </span>
-          {totalWallHits > 0 && (
+          {totalActiveSetups > 0 && (
             <Badge
               variant="support"
               className="px-1.5 py-0 text-[10px] font-mono"
             >
-              {totalWallHits}
+              {totalActiveSetups}
             </Badge>
           )}
         </button>
@@ -176,23 +171,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </span>
           <span className="flex items-center gap-1 font-mono text-[11px] text-slate-700">
             <span>{selectedAsset.symbol.replace(/=X$/, '')}</span>
-            {selectedAssetScore !== null && (
-              <span className="rounded bg-emerald-100 px-1 py-0.5 text-[10px] text-emerald-800 font-bold">
-                {selectedAssetScore}%
+            {selectedAssetState && (
+              <span className="rounded bg-slate-100 px-1 py-0.5 text-[9px] text-slate-800 font-bold">
+                {selectedAssetState}
               </span>
             )}
           </span>
         </button>
       </nav>
 
-      {/* Ranked Top Hit List with Confidence Scores */}
+      {/* Ranked Active Setups List */}
       <div className="hidden lg:flex lg:flex-1 lg:flex-col border-t border-slate-200 p-3 overflow-y-auto">
         <div className="flex items-center justify-between px-2 pb-2">
           <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
             <Compass className="h-3 w-3 text-emerald-600" />
             {CATEGORY_HIT_TITLES[activeCategory]}
           </span>
-          <span className="text-[10px] font-mono text-slate-400">Score %</span>
+          <span className="text-[10px] font-mono text-slate-400">State</span>
         </div>
 
         <div className="space-y-1">
@@ -202,15 +197,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
               selectedAsset.symbol === item.symbol &&
               selectedAsset.category === activeCategory;
 
-            const scoreColorClass =
-              item.score === null
-                ? 'border-slate-200 bg-slate-100 text-slate-500'
-                : item.score >= 70
+            const badgeClass =
+              item.atsState === 'STEP 2: REVERSAL CONFIRMED'
                 ? item.direction === 'SHORT'
                   ? 'border-rose-300 bg-rose-50 text-rose-800'
                   : 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                : item.score >= 40
-                ? 'border-amber-300 bg-amber-50 text-amber-800'
+                : item.atsState === 'STEP 1: THE WALL'
+                ? 'border-amber-300 bg-amber-50 text-amber-900'
+                : item.atsState === 'INVALIDATED'
+                ? 'border-rose-200 bg-rose-50/50 text-rose-600 line-through'
                 : 'border-slate-200 bg-slate-100 text-slate-500';
 
             return (
@@ -218,9 +213,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 key={item.symbol}
                 type="button"
                 title={
-                  item.score !== null
-                    ? `${item.displaySymbol} — ${item.tradeAction} (${item.score}% • ${item.wallLabel})`
-                    : `${item.displaySymbol} — Scoring MTF polarity...`
+                  item.atsState
+                    ? `${item.displaySymbol} — ${item.atsState} • ${item.density} line(s) • Risk to Didi: ${item.riskToDidi.toFixed(2)}%`
+                    : `${item.displaySymbol} — Awaiting scan...`
                 }
                 onClick={() => onSelectAsset(item.symbol, activeCategory)}
                 className={cn(
@@ -234,27 +229,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <span className="w-4 text-[10px] text-slate-400 text-right">
                     {idx + 1}.
                   </span>
-                  {item.direction === 'LONG' && (
-                    <span className="rounded bg-emerald-100 px-1 text-[9px] font-bold text-emerald-800">
-                      L
-                    </span>
-                  )}
-                  {item.direction === 'SHORT' && (
-                    <span className="rounded bg-rose-100 px-1 text-[9px] font-bold text-rose-800">
-                      S
-                    </span>
-                  )}
+                  {item.direction === 'LONG' &&
+                    (item.atsState === 'STEP 1: THE WALL' ||
+                      item.atsState === 'STEP 2: REVERSAL CONFIRMED') && (
+                      <span className="rounded bg-emerald-100 px-1 text-[9px] font-bold text-emerald-800">
+                        B
+                      </span>
+                    )}
+                  {item.direction === 'SHORT' &&
+                    (item.atsState === 'STEP 1: THE WALL' ||
+                      item.atsState === 'STEP 2: REVERSAL CONFIRMED') && (
+                      <span className="rounded bg-rose-100 px-1 text-[9px] font-bold text-rose-800">
+                        S
+                      </span>
+                    )}
                   <span className="truncate">{item.displaySymbol}</span>
                 </span>
 
-                {item.score !== null ? (
+                {item.atsState !== null ? (
                   <span
                     className={cn(
-                      'rounded border px-1.5 py-0.5 text-[10px] font-bold shrink-0',
-                      scoreColorClass
+                      'rounded border px-1.5 py-0.5 text-[9px] font-bold shrink-0',
+                      badgeClass
                     )}
                   >
-                    {item.score}%
+                    {shortStateTag(item.atsState, item.density)}
                   </span>
                 ) : screenerLoading[activeCategory] ? (
                   <Loader2 className="h-3 w-3 animate-spin text-slate-400 shrink-0" />
@@ -267,33 +266,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Proprietary ATS Polarity Reference Legend */}
-      <div className="hidden lg:block border-t border-slate-200 p-3">
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2 text-[11px]">
-          <div className="flex items-center gap-1.5 font-semibold text-slate-800">
-            <BookOpen className="h-3.5 w-3.5 text-emerald-600" />
-            <span>ATS Matrix Legend</span>
-          </div>
-          <div className="space-y-1 text-slate-600 leading-relaxed">
-            <p>
-              <strong className="text-slate-900 font-mono">Jack:</strong> Closes
-              at <span className="font-mono">t-21, t-20, t-19</span> (M20)
-            </p>
-            <p>
-              <strong className="text-slate-900 font-mono">Oggy:</strong> Closes
-              at <span className="font-mono">t-8, t-7, t-6</span> (M7)
-            </p>
-            <p>
-              <strong className="text-slate-900 font-mono">Didi:</strong>{' '}
-              Nearest HTF opposing polarity target (TP1)
-            </p>
-          </div>
-          <div className="flex items-center justify-between pt-1 border-t border-slate-200 font-mono text-[10px] font-semibold">
-            <span className="text-emerald-700 flex items-center gap-1">
-              <Layers className="h-3 w-3" /> GREEN = Support
-            </span>
-            <span className="text-rose-700">RED = Resist</span>
-          </div>
+      {/* Footer Info */}
+      <div className="hidden lg:block border-t border-slate-200 px-4 py-3 text-[11px] text-slate-500">
+        <div className="flex items-center justify-between">
+          <span>Horizons</span>
+          <span className="font-mono text-slate-700 font-medium">
+            D · W · M / 12M · 6M · 3M
+          </span>
+        </div>
+        <div className="mt-1 flex items-center justify-between">
+          <span>Colors</span>
+          <span className="font-mono text-slate-700 font-medium">
+            Jack G/R · Oggy Blue
+          </span>
         </div>
       </div>
     </aside>

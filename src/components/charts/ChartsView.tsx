@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   Crosshair,
   Eye,
-  Gauge,
   Layers,
   RefreshCw,
   Search,
@@ -27,13 +26,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { resolveExecutionModeResult } from '@/lib/atsScreener';
 import { cn, formatPrice } from '@/lib/utils';
 import { useATSStore } from '@/store/useATSStore';
 import {
   ALL_TIMEFRAMES,
   type AssetCategory,
   type ATSBaseline,
+  type AtsState,
   CHART_GRID_TIMEFRAMES,
   type MTFAssetPayload,
   type ScreenerResult,
@@ -46,31 +45,35 @@ interface ChartsViewProps {
   onSwitchCategory: (category: AssetCategory) => void;
 }
 
-function renderBaselineCell(line: ATSBaseline | null, category: AssetCategory) {
-  if (!line) {
-    return <span className="text-slate-400 text-xs font-mono">N/A</span>;
+/**
+ * Strict Rendering Rule:
+ * - Hide Pierced Lines: if pierced or Green support > livePrice or Red resistance < livePrice, remove from UI ("—").
+ * - Oggy lines render in BLUE; Jack lines retain Green=Support / Red=Resistance.
+ */
+function renderBaselineCell(
+  line: ATSBaseline | null,
+  category: AssetCategory,
+  livePrice: number
+) {
+  if (
+    !line ||
+    line.isPierced ||
+    (line.polarity === 'GREEN' && line.price > livePrice) ||
+    (line.polarity === 'RED' && line.price < livePrice)
+  ) {
+    return <span className="text-slate-300 text-xs font-mono">—</span>;
   }
 
-  if (line.isPierced) {
-    return (
-      <div
-        className="font-mono text-xs text-slate-400 line-through"
-        title="Niveau transpercé par les prix — ne fait plus effet"
-      >
-        {formatPrice(line.price, category)}
-      </div>
-    );
-  }
+  const colorClass =
+    line.family === 'Oggy'
+      ? 'text-blue-600'
+      : line.polarity === 'GREEN'
+      ? 'text-emerald-700'
+      : 'text-rose-700';
 
-  const isGreen = line.polarity === 'GREEN';
   return (
     <div className="font-mono text-xs">
-      <span
-        className={cn(
-          'font-bold',
-          isGreen ? 'text-emerald-700' : 'text-rose-700'
-        )}
-      >
+      <span className={cn('font-bold', colorClass)}>
         {formatPrice(line.price, category)}
       </span>
       <span className="ml-1.5 text-[10px] text-slate-500">
@@ -79,6 +82,22 @@ function renderBaselineCell(line: ATSBaseline | null, category: AssetCategory) {
       </span>
     </div>
   );
+}
+
+function stateBadgeVariant(
+  state: AtsState,
+  setupSide: 'BUY' | 'SELL' | 'NONE'
+): 'support' | 'resistance' | 'amber' | 'outline' {
+  if (state === 'STEP 2: REVERSAL CONFIRMED') {
+    return setupSide === 'SELL' ? 'resistance' : 'support';
+  }
+  if (state === 'STEP 1: THE WALL') {
+    return 'amber';
+  }
+  if (state === 'INVALIDATED') {
+    return 'resistance';
+  }
+  return 'outline';
 }
 
 export const ChartsView: React.FC<ChartsViewProps> = ({
@@ -163,82 +182,78 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
     return map;
   }, [payload]);
 
+  const categoryResults = screenerResults[selectedAsset.category];
+
   const scoreMap = useMemo(() => {
-    const map = new Map<string, ScreenerResult>();
-    for (const r of screenerResults[selectedAsset.category]) {
-      map.set(r.symbol, r);
+    const m = new Map<string, ScreenerResult>();
+    for (const r of categoryResults) {
+      m.set(r.symbol, r);
     }
-    if (payload && payload.category === selectedAsset.category) {
-      map.set(payload.symbol, payload.screener);
-    }
-    return map;
-  }, [payload, screenerResults, selectedAsset.category]);
+    return m;
+  }, [categoryResults]);
 
   const quickSwitchSymbols = useMemo(() => {
-    const topScoredSyms = [...screenerResults[selectedAsset.category]]
-      .sort((a, b) => b.confidenceScore - a.confidenceScore)
-      .slice(0, 14)
-      .map((r) => r.symbol);
-
-    return Array.from(
-      new Set([
-        selectedAsset.symbol,
-        ...topScoredSyms,
-        ...watchlists[selectedAsset.category],
-      ])
-    ).slice(0, 24);
-  }, [
-    screenerResults,
-    selectedAsset.category,
-    selectedAsset.symbol,
-    watchlists,
-  ]);
-
-  const missingRibbonKey = useMemo(() => {
-    return quickSwitchSymbols.filter((s) => !scoreMap.has(s)).join(',');
-  }, [quickSwitchSymbols, scoreMap]);
+    if (categoryResults.length > 0) {
+      const topSyms = categoryResults.slice(0, 14).map((r) => r.symbol);
+      if (!topSyms.includes(selectedAsset.symbol)) {
+        return [selectedAsset.symbol, ...topSyms];
+      }
+      return topSyms;
+    }
+    const wl = watchlists[selectedAsset.category];
+    if (!wl.includes(selectedAsset.symbol)) {
+      return [selectedAsset.symbol, ...wl];
+    }
+    return wl;
+  }, [categoryResults, selectedAsset.category, selectedAsset.symbol, watchlists]);
 
   useEffect(() => {
-    if (!missingRibbonKey) return;
-    let cancelled = false;
-    const qs = new URLSearchParams({
-      category: selectedAsset.category,
-      symbols: missingRibbonKey,
-    });
+    if (categoryResults.length >= 5) return;
+    const seeds = watchlists[selectedAsset.category].slice(0, 12);
+    if (seeds.length === 0) return;
 
-    fetch(`/api/screener?${qs.toString()}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => {
-        if (cancelled || !json || !Array.isArray(json.results)) return;
-        const cur = scanProgress[selectedAsset.category];
-        appendScreenerBatch(
-          selectedAsset.category,
-          json.results as ScreenerResult[],
-          cur.completed,
-          cur.total
-        );
-      })
-      .catch(() => {
-        // Non-fatal
-      });
+    let cancelled = false;
+    (async () => {
+      try {
+        const qs = new URLSearchParams({
+          category: selectedAsset.category,
+          symbols: seeds.join(','),
+        });
+        const res = await fetch(`/api/screener?${qs.toString()}`);
+        if (!res.ok || cancelled) return;
+        const json = await res.json();
+        if (!cancelled && Array.isArray(json.results)) {
+          const curProg = scanProgress[selectedAsset.category];
+          appendScreenerBatch(
+            selectedAsset.category,
+            json.results as ScreenerResult[],
+            Math.max(curProg.completed, json.results.length),
+            Math.max(curProg.total, seeds.length)
+          );
+        }
+      } catch {
+        // Silent background warmup
+      }
+    })();
 
     return () => {
       cancelled = true;
     };
   }, [
     appendScreenerBatch,
-    missingRibbonKey,
+    categoryResults.length,
     scanProgress,
     selectedAsset.category,
+    watchlists,
   ]);
 
   const isShortSetup = payload?.screener.direction === 'SHORT';
 
   return (
     <div className="space-y-4">
-      {/* Top Asset Command & Prominent Confidence Score Header */}
+      {/* Top Asset Command Bar */}
       <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3">
             <Button variant="outline" size="sm" onClick={onBackToScreener}>
               <ArrowLeft className="h-3.5 w-3.5" />
@@ -283,25 +298,17 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
                 </div>
 
                 <Badge
-                  variant={
-                    payload.screener.signalStatus === 'CONFIRMED'
-                      ? payload.screener.direction === 'SHORT'
-                        ? 'resistance'
-                        : 'support'
-                      : payload.screener.signalStatus === 'CANDIDATE'
-                      ? 'amber'
-                      : 'outline'
-                  }
-                  className="font-mono"
+                  variant={stateBadgeVariant(
+                    payload.screener.atsState,
+                    payload.screener.setupSide
+                  )}
+                  className="font-mono font-bold"
                 >
-                  {payload.screener.signalStatus === 'CONFIRMED'
-                    ? payload.screener.direction === 'SHORT'
-                      ? '● SIGNAL ROUGE CONFIRMÉ'
-                      : '● SIGNAL VERT CONFIRMÉ'
-                    : payload.screener.signalStatus === 'CANDIDATE'
-                    ? '● SIGNAL ORANGE (Candidat)'
-                    : 'SURVEILLANCE'}{' '}
-                  • {payload.screener.activeWallLabel}
+                  {payload.screener.setupSide !== 'NONE' &&
+                  payload.screener.atsState !== 'NO SETUP'
+                    ? `${payload.screener.setupSide} • `
+                    : ''}
+                  {payload.screener.atsState}
                 </Badge>
               </div>
             ) : (
@@ -353,112 +360,60 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
           </div>
         </div>
 
-        {/* Dedicated Confidence Score Gauge + Mode A/B Toggle + 6-Horizon Polarity Summary */}
-        {payload && (() => {
-          const requirePhase3 = Boolean(uiPreferences.requirePhase3Confirmation);
-          const modeRes = resolveExecutionModeResult(
-            payload.screener,
-            requirePhase3
-          );
-          const isShort = payload.screener.direction === 'SHORT';
-
-          return (
-            <div className="grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3.5 lg:grid-cols-12 lg:items-center">
-              <div className="flex items-center gap-3.5 lg:col-span-5 lg:border-r lg:border-slate-200 lg:pr-4">
-                <div
-                  className={cn(
-                    'flex h-14 w-16 shrink-0 flex-col items-center justify-center rounded-xl border font-mono',
-                    modeRes.finalScore >= 70
-                      ? isShort
-                        ? 'border-rose-300 bg-rose-50 text-rose-800'
-                        : 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                      : modeRes.finalScore >= 40
-                      ? 'border-amber-300 bg-amber-50 text-amber-800'
-                      : 'border-slate-300 bg-white text-slate-600'
+        {/* ATS State Detection Summary + Cluster Density + Risk to Didi + 6-Horizon Strip */}
+        {payload && (
+          <div className="grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3.5 lg:grid-cols-12 lg:items-center">
+            <div className="flex flex-col gap-2 lg:col-span-5 lg:border-r lg:border-slate-200 lg:pr-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Badge
+                  variant={stateBadgeVariant(
+                    payload.screener.atsState,
+                    payload.screener.setupSide
                   )}
+                  className="font-mono text-xs px-2.5 py-0.5 font-bold"
                 >
-                  <span className="text-lg font-extrabold leading-none">
-                    {modeRes.finalScore}%
-                  </span>
-                  <span className="mt-0.5 text-[9px] uppercase tracking-wider opacity-80">
-                    {requirePhase3 ? 'Mode B' : 'Mode A'}
-                  </span>
+                  {payload.screener.atsState}
+                  {payload.screener.atsState === 'STEP 1: THE WALL'
+                    ? ' (AGGRESSIVE)'
+                    : payload.screener.atsState === 'STEP 2: REVERSAL CONFIRMED'
+                    ? ' (CONSERVATIVE)'
+                    : ''}
+                </Badge>
+
+                <span className="font-mono text-xs text-slate-600 font-semibold">
+                  {payload.screener.activeWallLabel}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 font-mono text-xs">
+                <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-400">
+                    Cluster Density (&le;1%)
+                  </div>
+                  <div className="mt-0.5 font-bold text-slate-900">
+                    {payload.screener.ClusterDensityCount}{' '}
+                    {payload.screener.ClusterDensityCount === 1
+                      ? 'Unbroken Line'
+                      : 'Unbroken Lines'}
+                  </div>
                 </div>
 
-                <div className="min-w-0 flex-1 space-y-1.5">
-                  <div className="flex flex-wrap items-center justify-between gap-1.5">
-                    <Badge
-                      variant={
-                        modeRes.finalScore >= 70
-                          ? isShort
-                            ? 'resistance'
-                            : 'support'
-                          : modeRes.finalScore >= 40
-                          ? 'amber'
-                          : 'outline'
-                      }
-                      className="font-mono text-[10px] py-0 px-2 font-bold"
-                    >
-                      {modeRes.tradeAction}
-                    </Badge>
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        toggleUIPreference('requirePhase3Confirmation')
-                      }
-                      title="Toggle between Mode A (Aggressive — Toggle OFF) and Mode B (Conservative — Require Phase 3 or -25 pts)"
-                      className={cn(
-                        'rounded-md border px-2 py-0.5 font-mono text-[10px] font-semibold transition-colors',
-                        requirePhase3
-                          ? 'border-sky-400 bg-sky-50 text-sky-900'
-                          : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
-                      )}
-                    >
-                      {requirePhase3
-                        ? 'Phase 3 Req: ON (Mode B)'
-                        : 'Phase 3 Req: OFF (Mode A)'}
-                    </button>
+                <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-400">
+                    Risk to Didi
                   </div>
-
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
-                    <div
-                      className={cn(
-                        'h-full rounded-full transition-all',
-                        modeRes.finalScore >= 70
-                          ? isShort
-                            ? 'bg-rose-600'
-                            : 'bg-emerald-600'
-                          : modeRes.finalScore >= 40
-                          ? 'bg-amber-500'
-                          : 'bg-slate-400'
-                      )}
-                      style={{ width: `${modeRes.finalScore}%` }}
-                    />
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2 font-mono text-[10px] text-slate-600">
-                    <span>
-                      Cluster: <strong>{payload.screener.pillar1ClusterScore}/60</strong>
+                  <div className="mt-0.5 font-bold text-rose-700">
+                    {payload.screener.RiskToDidi.toFixed(2)}%{' '}
+                    <span className="text-[10px] font-normal text-slate-500">
+                      (@ {formatPrice(payload.screener.didiPrice, payload.category)})
                     </span>
-                    <span>·</span>
-                    <span>
-                      Didi Risk: <strong>{payload.screener.pillar2RiskScore}/40</strong> ({payload.screener.didiDistancePct.toFixed(2)}%)
-                    </span>
-                    {modeRes.phase3PenaltyApplied && (
-                      <>
-                        <span>·</span>
-                        <span className="text-rose-700 font-bold">
-                          -25pt Phase 2
-                        </span>
-                      </>
-                    )}
                   </div>
                 </div>
               </div>
+            </div>
 
-              {/* 6-Timeframe Polarity Strip */}
-              <div className="lg:col-span-7 space-y-1.5">
+            {/* 6-Timeframe Unbroken Horizon Strip */}
+            <div className="lg:col-span-7 space-y-1.5">
               <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
                 {ALL_TIMEFRAMES.map((tf) => {
                   const h = payload.screener.horizonMatrix[tf];
@@ -483,9 +438,13 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
                         <span className="text-emerald-700 font-semibold">
                           {h.greenCount}G
                         </span>
-                        <span className="text-slate-400"> / </span>
+                        <span className="text-slate-400">/</span>
                         <span className="text-rose-700 font-semibold">
                           {h.redCount}R
+                        </span>
+                        <span className="text-slate-400">/</span>
+                        <span className="text-blue-600 font-semibold">
+                          {h.oggyCount}B
                         </span>
                       </div>
                     </div>
@@ -493,13 +452,12 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
                 })}
               </div>
               <p className="text-xs text-slate-700 leading-snug">
-                <span className="font-semibold text-slate-900">Thesis: </span>
+                <span className="font-semibold text-slate-900">State Logic: </span>
                 {payload.screener.thesisHeadline}
               </p>
             </div>
           </div>
-          );
-        })()}
+        )}
 
         {/* ATS Execution Levels Strip + Layer Toggles */}
         <div className="flex flex-col gap-3 border-t border-slate-200 pt-2.5 lg:flex-row lg:items-center lg:justify-between">
@@ -508,12 +466,12 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
               <div>
                 <span className="text-slate-500">Didi Stop-Loss: </span>
                 <span className="text-rose-700 font-bold">
-                  {formatPrice(payload.screener.didiStopPrice, payload.category)}{' '}
-                  ({payload.screener.didiDistancePct.toFixed(2)}% away)
+                  {formatPrice(payload.screener.didiPrice, payload.category)} (
+                  {payload.screener.RiskToDidi.toFixed(2)}% Risk)
                 </span>
               </div>
               <div>
-                <span className="text-slate-500">TP1 (Didi): </span>
+                <span className="text-slate-500">TP1 (M7): </span>
                 {payload.screener.effectiveTargetTP1 ? (
                   <span className="text-emerald-700 font-bold">
                     {formatPrice(
@@ -525,26 +483,18 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
                     {payload.screener.effectiveTargetTP1.upsidePct.toFixed(1)}%)
                   </span>
                 ) : (
-                  <span className="text-slate-500">Open Discovery</span>
+                  <span className="text-slate-500">—</span>
                 )}
               </div>
               {payload.screener.macroTargetTP2 && (
                 <div>
-                  <span className="text-slate-500">TP2 (Macro M20): </span>
+                  <span className="text-slate-500">TP2 (M20): </span>
                   <span className="text-sky-700 font-bold">
                     {formatPrice(
                       payload.screener.macroTargetTP2.price,
                       payload.category
                     )}{' '}
                     ({payload.screener.macroTargetTP2.label})
-                  </span>
-                </div>
-              )}
-              {payload.screener.riskRewardRatio !== null && (
-                <div>
-                  <span className="text-slate-500">R:R: </span>
-                  <span className="text-amber-700 font-bold">
-                    {payload.screener.riskRewardRatio.toFixed(2)}x
                   </span>
                 </div>
               )}
@@ -564,7 +514,7 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
               )}
             >
               <Layers className="h-3 w-3" />
-              Jack (M20)
+              Jack (Green/Red)
             </button>
 
             <button
@@ -573,12 +523,12 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
               className={cn(
                 'inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors',
                 uiPreferences.showOggy
-                  ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                  ? 'border-blue-300 bg-blue-50 text-blue-800'
                   : 'border-slate-200 bg-slate-100 text-slate-400'
               )}
             >
               <Layers className="h-3 w-3" />
-              Oggy (M7)
+              Oggy (Blue)
             </button>
 
             <button
@@ -637,16 +587,16 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
           </div>
         </div>
 
-        {/* Quick-Switch Ticker Ribbon with Live Confidence Score */}
+        {/* Quick-Switch Ticker Ribbon with ATS State */}
         <div className="flex items-center gap-1.5 overflow-x-auto pt-1 pb-0.5">
           <span className="text-[11px] uppercase tracking-wider text-slate-500 mr-1 shrink-0 font-semibold">
-            Tickers &amp; Confidence:
+            Tickers &amp; State:
           </span>
           {quickSwitchSymbols.map((sym) => {
             const isSelected = sym === selectedAsset.symbol;
             const info = scoreMap.get(sym);
-            const score = info?.confidenceScore ?? null;
-            const dir = info?.direction ?? 'NEUTRAL';
+            const st = info?.atsState ?? null;
+            const dens = info?.ClusterDensityCount ?? 0;
 
             return (
               <button
@@ -661,20 +611,26 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
                 )}
               >
                 <span>{sym.replace(/=X$/, '')}</span>
-                {score !== null && (
+                {st !== null && (
                   <span
                     className={cn(
-                      'rounded px-1 text-[10px] font-bold',
-                      score >= 70
-                        ? dir === 'SHORT'
+                      'rounded px-1 text-[9px] font-bold',
+                      st === 'STEP 2: REVERSAL CONFIRMED'
+                        ? info?.setupSide === 'SELL'
                           ? 'bg-rose-100 text-rose-800'
                           : 'bg-emerald-100 text-emerald-800'
-                        : score >= 45
-                        ? 'bg-amber-100 text-amber-800'
+                        : st === 'STEP 1: THE WALL'
+                        ? 'bg-amber-100 text-amber-900'
                         : 'bg-slate-200 text-slate-600'
                     )}
                   >
-                    {score}%
+                    {st === 'STEP 2: REVERSAL CONFIRMED'
+                      ? `S2·${dens}L`
+                      : st === 'STEP 1: THE WALL'
+                      ? `S1·${dens}L`
+                      : st === 'INVALIDATED'
+                      ? 'INVAL'
+                      : 'NONE'}
                   </span>
                 )}
               </button>
@@ -738,20 +694,23 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
               })}
             </div>
 
-            {/* Full Numerical MTF Jack & Oggy Polarity Matrix Audit Table */}
+            {/* Unbroken MTF Jack (Green/Red) & Oggy (Blue) Matrix Table — Pierced Lines Hidden */}
             <Card className="border-slate-200">
               <CardHeader className="pb-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <CardTitle className="text-sm font-semibold text-slate-900">
-                    Multi-Timeframe ATS Polarity Matrix — {payload.displaySymbol}{' '}
-                    (Confidence: {payload.screener.confidenceScore}%)
+                    Unbroken Multi-Timeframe Matrix — {payload.displaySymbol} (
+                    {payload.screener.atsState})
                   </CardTitle>
-                  <div className="flex items-center gap-3 text-xs font-mono font-semibold">
+                  <div className="flex flex-wrap items-center gap-3 text-xs font-mono font-semibold">
                     <span className="text-emerald-700">
-                      ● GREEN = Support (Price &ge; Historical Close)
+                      ● JACK GREEN = Support
                     </span>
                     <span className="text-rose-700">
-                      ● RED = Resistance (Price &lt; Historical Close)
+                      ● JACK RED = Resistance
+                    </span>
+                    <span className="text-blue-600">
+                      ● OGGY BLUE = Unbroken Oggy (Pierced Hidden)
                     </span>
                   </div>
                 </div>
@@ -782,37 +741,43 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
                           <TableCell>
                             {renderBaselineCell(
                               tfData.Jack.Jack_Minus1,
-                              payload.category
+                              payload.category,
+                              payload.livePrice
                             )}
                           </TableCell>
                           <TableCell>
                             {renderBaselineCell(
                               tfData.Jack.Jack_0,
-                              payload.category
+                              payload.category,
+                              payload.livePrice
                             )}
                           </TableCell>
                           <TableCell>
                             {renderBaselineCell(
                               tfData.Jack.Jack_Plus1,
-                              payload.category
+                              payload.category,
+                              payload.livePrice
                             )}
                           </TableCell>
                           <TableCell>
                             {renderBaselineCell(
                               tfData.Oggy.Oggy_Minus1,
-                              payload.category
+                              payload.category,
+                              payload.livePrice
                             )}
                           </TableCell>
                           <TableCell>
                             {renderBaselineCell(
                               tfData.Oggy.Oggy_0,
-                              payload.category
+                              payload.category,
+                              payload.livePrice
                             )}
                           </TableCell>
                           <TableCell>
                             {renderBaselineCell(
                               tfData.Oggy.Oggy_Plus1,
-                              payload.category
+                              payload.category,
+                              payload.livePrice
                             )}
                           </TableCell>
                           <TableCell className="font-mono text-xs text-sky-700 font-semibold">

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { compareScreenerResults } from '@/lib/atsScreener';
 import { buildMTFAssetPayload } from '@/lib/marketDataFetcher';
 import type { AssetCategory, ScreenerResult } from '@/types/ats';
 
@@ -85,15 +86,7 @@ export async function GET(request: NextRequest) {
     }
   });
 
-  results.sort((a, b) => {
-    if (b.confidenceScore !== a.confidenceScore) {
-      return b.confidenceScore - a.confidenceScore;
-    }
-    if (a.isAtWall !== b.isAtWall) {
-      return a.isAtWall ? -1 : 1;
-    }
-    return b.setupStep - a.setupStep;
-  });
+  results.sort((a, b) => compareScreenerResults(a, b, 'STATE'));
 
   return NextResponse.json(
     {

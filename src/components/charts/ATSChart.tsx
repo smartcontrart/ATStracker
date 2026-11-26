@@ -131,12 +131,12 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       handleScale: true,
     });
 
-    // 1. Bollinger Band Upper + Warm Light-Yellow Bounded Cloud
+    // 1. Bollinger Band Upper + Warm Light-Yellow Bounded Cloud (thin lineWidth: 1)
     const bbUpperArea = chart.addAreaSeries({
       lineColor: '#16a34a',
       topColor: 'rgba(254, 249, 195, 0.0)',
       bottomColor: 'rgba(254, 249, 195, 0.0)',
-      lineWidth: 2,
+      lineWidth: 1,
       priceLineVisible: false,
       lastValueVisible: false,
       crosshairMarkerVisible: false,
@@ -146,10 +146,10 @@ export const ATSChart: React.FC<ATSChartProps> = ({
     const bbCloud = new BollingerBandCloudPrimitive('rgba(254, 249, 195, 0.78)');
     bbUpperArea.attachPrimitive(bbCloud);
 
-    // 2. M20 (SMA 20 / BB Mid) — Green or Red
+    // 2. M20 (SMA 20 / BB Mid) — Green or Red (thin lineWidth: 1)
     const sma20Line = chart.addLineSeries({
       color: '#16a34a',
-      lineWidth: 2,
+      lineWidth: 1,
       lineStyle: LineStyle.Solid,
       priceLineVisible: false,
       lastValueVisible: false,
@@ -157,10 +157,10 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       priceFormat: { type: 'price', precision: pricePrecision, minMove },
     });
 
-    // 3. M7 (SMA 7) — Green or Red
+    // 3. M7 (SMA 7) — Green or Red (thin lineWidth: 1)
     const sma7Line = chart.addLineSeries({
       color: '#16a34a',
-      lineWidth: 2,
+      lineWidth: 1,
       lineStyle: LineStyle.Solid,
       priceLineVisible: false,
       lastValueVisible: false,
@@ -168,22 +168,22 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       priceFormat: { type: 'price', precision: pricePrecision, minMove },
     });
 
-    // 4. Bollinger Band Lower — Green or Red
+    // 4. Bollinger Band Lower — Green or Red (thin lineWidth: 1)
     const bbLowerLine = chart.addLineSeries({
       color: '#16a34a',
-      lineWidth: 2,
+      lineWidth: 1,
       priceLineVisible: false,
       lastValueVisible: false,
       crosshairMarkerVisible: false,
       priceFormat: { type: 'price', precision: pricePrecision, minMove },
     });
 
-    // 5. Force Black OHLC Bar Charts (`barcolor(color.black)`, Open & Close ticks visible)
+    // 5. OHLC Bar Series (native handles autoscale/crosshair/Y-axis; canvas renders exact 1.35px black bars)
     const barSeries = chart.addBarSeries({
-      upColor: '#000000',
-      downColor: '#000000',
+      upColor: 'rgba(0, 0, 0, 0)',
+      downColor: 'rgba(0, 0, 0, 0)',
       openVisible: true,
-      thinBars: false,
+      thinBars: true,
       priceFormat: { type: 'price', precision: pricePrecision, minMove },
     });
 
@@ -316,8 +316,12 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       });
     }
 
-    // Active unpierced proximate Jack & Oggy horizontal rays (starting at origin bar -> right edge)
+    // Active UNBROKEN proximate Jack (Green/Red) & Oggy (BLUE) horizontal rays (thin lineWidth: 1)
     const activeBaselines: ATSBaseline[] = [];
+    const isBrokenByLivePrice = (line: ATSBaseline) =>
+      line.isPierced ||
+      (line.polarity === 'GREEN' && line.price > livePrice) ||
+      (line.polarity === 'RED' && line.price < livePrice);
 
     if (preferences.showJack) {
       const jackEntries = [
@@ -326,14 +330,15 @@ export const ATSChart: React.FC<ATSChartProps> = ({
         data.Jack.Jack_Plus1,
       ];
       for (const line of jackEntries) {
-        if (!line || !line.shouldPlotOnChart) continue;
+        if (!line || !line.shouldPlotOnChart || isBrokenByLivePrice(line)) {
+          continue;
+        }
         activeBaselines.push(line);
-        const strictColor = line.polarity === 'GREEN' ? '#16a34a' : '#dc2626';
+        const jackColor = line.polarity === 'GREEN' ? '#16a34a' : '#dc2626';
 
-        // Native right Y-axis label only; horizontal ray from origin bar is drawn by canvas primitive
         const created = barSeries.createPriceLine({
           price: line.price,
-          color: strictColor,
+          color: jackColor,
           lineWidth: 1,
           lineStyle: LineStyle.Solid,
           lineVisible: false,
@@ -351,13 +356,16 @@ export const ATSChart: React.FC<ATSChartProps> = ({
         data.Oggy.Oggy_Plus1,
       ];
       for (const line of oggyEntries) {
-        if (!line || !line.shouldPlotOnChart) continue;
+        if (!line || !line.shouldPlotOnChart || isBrokenByLivePrice(line)) {
+          continue;
+        }
         activeBaselines.push(line);
-        const strictColor = line.polarity === 'GREEN' ? '#16a34a' : '#dc2626';
+        // Strict visual rule: ALL Oggy lines (-1, 0, +1) MUST be rendered in BLUE
+        const oggyBlue = '#2563eb';
 
         const created = barSeries.createPriceLine({
           price: line.price,
-          color: strictColor,
+          color: oggyBlue,
           lineWidth: 1,
           lineStyle: LineStyle.Solid,
           lineVisible: false,
@@ -372,6 +380,7 @@ export const ATSChart: React.FC<ATSChartProps> = ({
     const lastBarTime =
       data.bars.length > 0 ? data.bars[data.bars.length - 1].time : null;
     sarPrimitive?.setData({
+      bars: data.bars,
       sarPoints: data.parabolicSAR,
       showSAR: preferences.showSAR,
       originTimes,
@@ -392,6 +401,7 @@ export const ATSChart: React.FC<ATSChartProps> = ({
     }
   }, [
     data,
+    livePrice,
     preferences.showBollinger,
     preferences.showSAR,
     preferences.showJack,
@@ -475,9 +485,22 @@ export const ATSChart: React.FC<ATSChartProps> = ({
     };
   }, [data.bars, data.timeframe, preferences.syncCrosshair, syncBus]);
 
-  const unpiercedLines = flattenTimeframeBaselines(data.Jack, data.Oggy, true);
-  const greenCount = unpiercedLines.filter((l) => l.polarity === 'GREEN').length;
-  const redCount = unpiercedLines.filter((l) => l.polarity === 'RED').length;
+  const unpiercedLines = flattenTimeframeBaselines(
+    data.Jack,
+    data.Oggy,
+    true
+  ).filter((l) =>
+    l.polarity === 'GREEN' ? l.price <= livePrice : l.price >= livePrice
+  );
+  const jackGreenCount = unpiercedLines.filter(
+    (l) => l.family === 'Jack' && l.polarity === 'GREEN'
+  ).length;
+  const jackRedCount = unpiercedLines.filter(
+    (l) => l.family === 'Jack' && l.polarity === 'RED'
+  ).length;
+  const oggyBlueCount = unpiercedLines.filter(
+    (l) => l.family === 'Oggy'
+  ).length;
 
   return (
     <div
@@ -522,16 +545,23 @@ export const ATSChart: React.FC<ATSChartProps> = ({
         <div className="flex items-center gap-1.5 text-[11px] font-mono">
           <span
             className="text-emerald-700 font-bold"
-            title="Supports non-transpercés"
+            title="Unbroken Green Jack Supports"
           >
-            {greenCount}G
+            {jackGreenCount}JG
           </span>
           <span className="text-slate-400">/</span>
           <span
             className="text-rose-700 font-bold"
-            title="Résistances non-transpercées"
+            title="Unbroken Red Jack Resistances"
           >
-            {redCount}R
+            {jackRedCount}JR
+          </span>
+          <span className="text-slate-400">/</span>
+          <span
+            className="text-blue-600 font-bold"
+            title="Unbroken Blue Oggy Lines"
+          >
+            {oggyBlueCount}OB
           </span>
           {onExpand && (
             <button

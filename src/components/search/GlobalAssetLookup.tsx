@@ -413,17 +413,26 @@ export const GlobalAssetLookup: React.FC<GlobalAssetLookupProps> = ({
                             </span>
                             <Badge
                               variant={
-                                inspectedPayload.screener.direction === 'SHORT'
+                                inspectedPayload.screener.atsState ===
+                                'STEP 2: REVERSAL CONFIRMED'
+                                  ? inspectedPayload.screener.setupSide ===
+                                    'SELL'
+                                    ? 'resistance'
+                                    : 'support'
+                                  : inspectedPayload.screener.atsState ===
+                                    'STEP 1: THE WALL'
+                                  ? 'amber'
+                                  : inspectedPayload.screener.atsState ===
+                                    'INVALIDATED'
                                   ? 'resistance'
-                                  : inspectedPayload.screener.direction === 'LONG'
-                                  ? 'support'
                                   : 'outline'
                               }
                               className="font-mono text-[10px]"
                             >
-                              {inspectedPayload.screener.direction} •{' '}
-                              {inspectedPayload.screener.confidenceScore}% (Step{' '}
-                              {inspectedPayload.screener.setupStep}/4)
+                              {inspectedPayload.screener.atsState} •{' '}
+                              {inspectedPayload.screener.ClusterDensityCount}L •
+                              Didi{' '}
+                              {inspectedPayload.screener.RiskToDidi.toFixed(2)}%
                             </Badge>
                           </div>
                           <p className="mt-1 text-xs text-slate-700">

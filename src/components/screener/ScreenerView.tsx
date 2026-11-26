@@ -3,12 +3,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
-  ArrowDownRight,
+  ArrowDownUp,
   ArrowUpRight,
   ChevronDown,
   ChevronUp,
-  Filter,
   Info,
+  Layers,
   Plus,
   RefreshCw,
   Search,
@@ -32,12 +32,17 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { UNIVERSE_PRESETS } from '@/lib/assetUniverses';
-import { resolveExecutionModeResult } from '@/lib/atsScreener';
+import { compareScreenerResults, type ScreenerSortKey } from '@/lib/atsScreener';
 import { cn, formatPrice } from '@/lib/utils';
-import { type DirectionFilter, useATSStore } from '@/store/useATSStore';
+import {
+  type AtsStateFilter,
+  type DirectionFilter,
+  useATSStore,
+} from '@/store/useATSStore';
 import {
   ALL_TIMEFRAMES,
   type AssetCategory,
+  type AtsState,
   type ScreenerResult,
 } from '@/types/ats';
 
@@ -47,12 +52,43 @@ interface ScreenerViewProps {
 }
 
 const CATEGORY_PLACEHOLDERS: Record<AssetCategory, string> = {
-  stocks: 'Add custom Stock/ETF (e.g., SNOW, ARM, SMCI)...',
+  stocks: 'Add custom Stock/ETF (e.g., SNOW, ARM, SU.PA)...',
   crypto: 'Add custom Crypto (e.g., HYPE, TAO, PEPE)...',
-  forex: 'Add custom FX pair (e.g., EURPLN, USDNOK)...',
+  forex: 'Add custom FX pair (e.g., DXY, EURPLN, USDNOK)...',
 };
 
 const BATCH_SIZE = 25;
+
+function getStateBadgeStyle(
+  state: AtsState,
+  setupSide: 'BUY' | 'SELL' | 'NONE'
+): {
+  variant: 'support' | 'resistance' | 'amber' | 'outline';
+  subLabel: string;
+} {
+  if (state === 'STEP 2: REVERSAL CONFIRMED') {
+    return {
+      variant: setupSide === 'SELL' ? 'resistance' : 'support',
+      subLabel: 'CONSERVATIVE • PHASE 3',
+    };
+  }
+  if (state === 'STEP 1: THE WALL') {
+    return {
+      variant: 'amber',
+      subLabel: 'AGGRESSIVE • PHASE 2',
+    };
+  }
+  if (state === 'INVALIDATED') {
+    return {
+      variant: 'resistance',
+      subLabel: 'DIDI BREACHED >1%',
+    };
+  }
+  return {
+    variant: 'outline',
+    subLabel: 'GATEKEEPER FILTERED',
+  };
+}
 
 export const ScreenerView: React.FC<ScreenerViewProps> = ({
   onSelectCandidate,
@@ -74,8 +110,9 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
     appendScreenerBatch,
     finishCategoryScan,
     uiPreferences,
-    toggleUIPreference,
     setDirectionFilter,
+    setStateFilter,
+    setSortBy,
   } = useATSStore();
 
   const [tickerInput, setTickerInput] = useState('');
@@ -152,17 +189,18 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
         if (!controller.signal.aborted) {
           const warnMsg =
             failedSymbols.length > 0
-              ? `Note: ${failedSymbols.length} symbol(s) unavailable on free feed (${failedSymbols
-                  .slice(0, 6)
-                  .join(', ')}${failedSymbols.length > 6 ? '...' : ''}).`
+              ? `Completed with ${failedSymbols.length} unavailable symbol(s): ${failedSymbols
+                  .slice(0, 5)
+                  .join(', ')}${failedSymbols.length > 5 ? '…' : ''}`
               : null;
           finishCategoryScan(category, warnMsg);
         }
       } catch (err) {
-        if (controller.signal.aborted) return;
-        const msg =
-          err instanceof Error ? err.message : 'Progressive scan interrupted';
-        finishCategoryScan(category, msg);
+        if ((err as Error)?.name === 'AbortError') return;
+        finishCategoryScan(
+          category,
+          err instanceof Error ? err.message : 'Screener batch scan failed'
+        );
       }
     },
     [appendScreenerBatch, finishCategoryScan, startCategoryScan]
@@ -171,16 +209,20 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
   const currentPresetId = universePreset[activeCategory];
 
   useEffect(() => {
-    setVisibleLimit(60);
-    const existing = useATSStore.getState().screenerResults[activeCategory];
-    const isLoading = useATSStore.getState().screenerLoading[activeCategory];
-
-    if (!isLoading && existing.length === 0) {
-      const targetSymbols = getActiveSymbolsForCategory(activeCategory);
-      void runProgressiveUniverseScan(activeCategory, targetSymbols);
+    const existing = screenerResults[activeCategory];
+    const isBusy = screenerLoading[activeCategory];
+    if (existing.length === 0 && !isBusy) {
+      const syms = getActiveSymbolsForCategory(activeCategory);
+      void runProgressiveUniverseScan(activeCategory, syms);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCategory, currentPresetId]);
+  }, [
+    activeCategory,
+    currentPresetId,
+    getActiveSymbolsForCategory,
+    runProgressiveUniverseScan,
+    screenerLoading,
+    screenerResults,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -192,38 +234,26 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
     e.preventDefault();
     if (!tickerInput.trim()) return;
 
-    const rawTokens = tickerInput
-      .split(/[\s,;]+/)
-      .map((t) => t.trim())
-      .filter(Boolean);
+    const added = addTicker(tickerInput, activeCategory);
     setTickerInput('');
-
-    const addedList: string[] = [];
-    for (const token of rawTokens) {
-      const added = addTicker(token, activeCategory);
-      if (added) addedList.push(added);
-    }
-    if (addedList.length === 0) return;
+    if (!added) return;
 
     try {
-      for (let i = 0; i < addedList.length; i += 25) {
-        const chunk = addedList.slice(i, i + 25);
-        const qs = new URLSearchParams({
-          category: activeCategory,
-          symbols: chunk.join(','),
-        });
-        const res = await fetch(`/api/screener?${qs.toString()}`);
-        if (res.ok) {
-          const json = await res.json();
-          const curProgress =
-            useATSStore.getState().scanProgress[activeCategory];
-          appendScreenerBatch(
-            activeCategory,
-            (json.results || []) as ScreenerResult[],
-            curProgress.completed + chunk.length,
-            curProgress.total + chunk.length
-          );
-        }
+      const qs = new URLSearchParams({
+        category: activeCategory,
+        symbols: added,
+      });
+      const res = await fetch(`/api/screener?${qs.toString()}`);
+      if (res.ok) {
+        const json = await res.json();
+        const curProgress =
+          useATSStore.getState().scanProgress[activeCategory];
+        appendScreenerBatch(
+          activeCategory,
+          (json.results || []) as ScreenerResult[],
+          curProgress.completed + 1,
+          curProgress.total + 1
+        );
       }
     } catch {
       // Non-fatal
@@ -236,80 +266,94 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
   const scanError = screenerErrors[activeCategory];
   const scannedTimestamp = lastScannedAt[activeCategory];
 
-  const requirePhase3 = Boolean(uiPreferences.requirePhase3Confirmation);
+  const activeSort: ScreenerSortKey = uiPreferences.sortBy || 'STATE';
+  const activeStateFilter: AtsStateFilter = uiPreferences.stateFilter || 'ALL';
 
-  const supportWallsCount = useMemo(
+  const step2Count = useMemo(
     () =>
-      rows.filter(
-        (r) =>
-          r.direction === 'LONG' &&
-          resolveExecutionModeResult(r, requirePhase3).finalScore >= 70
-      ).length,
-    [requirePhase3, rows]
-  );
-  const resistanceWallsCount = useMemo(
-    () =>
-      rows.filter(
-        (r) =>
-          r.direction === 'SHORT' &&
-          resolveExecutionModeResult(r, requirePhase3).finalScore >= 70
-      ).length,
-    [requirePhase3, rows]
-  );
-  const step3PlusCount = useMemo(
-    () => rows.filter((r) => r.isPhase3 && r.pillar1ClusterScore > 0 && !r.isKnockedOut).length,
+      rows.filter((r) => r.atsState === 'STEP 2: REVERSAL CONFIRMED').length,
     [rows]
   );
+  const step1Count = useMemo(
+    () => rows.filter((r) => r.atsState === 'STEP 1: THE WALL').length,
+    [rows]
+  );
+  const activeBuySellCounts = useMemo(() => {
+    let buy = 0;
+    let sell = 0;
+    for (const r of rows) {
+      if (
+        r.atsState === 'STEP 1: THE WALL' ||
+        r.atsState === 'STEP 2: REVERSAL CONFIRMED'
+      ) {
+        if (r.setupSide === 'BUY') buy++;
+        else if (r.setupSide === 'SELL') sell++;
+      }
+    }
+    return { buy, sell };
+  }, [rows]);
 
-  const sortedByModeRows = useMemo(
-    () =>
-      [...rows].sort((a, b) => {
-        const scoreB = resolveExecutionModeResult(b, requirePhase3).finalScore;
-        const scoreA = resolveExecutionModeResult(a, requirePhase3).finalScore;
-        if (scoreB !== scoreA) return scoreB - scoreA;
-        return b.pillar1ClusterScore - a.pillar1ClusterScore;
-      }),
-    [requirePhase3, rows]
+  const sortedRows = useMemo(
+    () => [...rows].sort((a, b) => compareScreenerResults(a, b, activeSort)),
+    [activeSort, rows]
   );
 
-  const topHitLeaders = useMemo(
-    () => sortedByModeRows.slice(0, 6),
-    [sortedByModeRows]
+  const topActiveSetups = useMemo(
+    () =>
+      sortedRows
+        .filter(
+          (r) =>
+            r.atsState === 'STEP 2: REVERSAL CONFIRMED' ||
+            r.atsState === 'STEP 1: THE WALL'
+        )
+        .slice(0, 6),
+    [sortedRows]
   );
 
   const filteredRows = useMemo(() => {
     const query = tableSearch.trim().toUpperCase();
-    return sortedByModeRows.filter((r) => {
-      const modeRes = resolveExecutionModeResult(r, requirePhase3);
-      if (uiPreferences.onlyWallCandidates && modeRes.finalScore < 40) {
-        return false;
+    return sortedRows.filter((r) => {
+      if (activeStateFilter === 'ACTIVE') {
+        if (
+          r.atsState !== 'STEP 1: THE WALL' &&
+          r.atsState !== 'STEP 2: REVERSAL CONFIRMED'
+        ) {
+          return false;
+        }
+      } else if (activeStateFilter === 'STEP2') {
+        if (r.atsState !== 'STEP 2: REVERSAL CONFIRMED') return false;
+      } else if (activeStateFilter === 'STEP1') {
+        if (r.atsState !== 'STEP 1: THE WALL') return false;
+      } else if (activeStateFilter === 'INVALIDATED') {
+        if (r.atsState !== 'INVALIDATED') return false;
       }
+
       if (
         uiPreferences.directionFilter === 'LONG' &&
-        r.direction !== 'LONG'
+        r.setupSide !== 'BUY'
       ) {
         return false;
       }
       if (
         uiPreferences.directionFilter === 'SHORT' &&
-        r.direction !== 'SHORT'
+        r.setupSide !== 'SELL'
       ) {
         return false;
       }
+
       if (query) {
         const hay = `${r.symbol} ${r.displaySymbol} ${r.name || ''} ${
-          r.activeWallLabel
-        } ${modeRes.tradeAction} ${r.thesisHeadline}`.toUpperCase();
+          r.atsState
+        } ${r.activeWallLabel} ${r.thesisHeadline}`.toUpperCase();
         if (!hay.includes(query)) return false;
       }
       return true;
     });
   }, [
-    requirePhase3,
-    sortedByModeRows,
+    activeStateFilter,
+    sortedRows,
     tableSearch,
     uiPreferences.directionFilter,
-    uiPreferences.onlyWallCandidates,
   ]);
 
   const displayedRows = filteredRows.slice(0, visibleLimit);
@@ -331,29 +375,29 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
-              Top Candidates — Bidirectional ATS Screener
+              ATS State Detection Screener
             </h1>
             <Badge variant="support" className="font-mono">
-              SUPPORT &amp; RESISTANCE WALLS
+              SETUP 1-2-3-4 ENGINE
             </Badge>
           </div>
           <p className="mt-1 text-xs text-slate-600 sm:text-sm">
-            Scans S&amp;P 500 equities, Top 100 Cryptos, and Top 50 USD/FX pairs
-            for 1% Higher-Timeframe{' '}
+            Chronological state classification:{' '}
             <span className="text-emerald-700 font-semibold">
-              Green Support (LONG)
+              STEP 2: REVERSAL CONFIRMED
             </span>{' '}
-            &amp;{' '}
-            <span className="text-rose-700 font-semibold">
-              Red Resistance (SHORT)
+            ·{' '}
+            <span className="text-amber-700 font-semibold">
+              STEP 1: THE WALL
             </span>{' '}
-            confluence. Click any row for 6-pane OHLC bar charts or{' '}
-            <span className="text-slate-900 font-semibold">&ldquo;Why?&rdquo;</span>{' '}
-            for full indicator reasoning.
+            ·{' '}
+            <span className="text-slate-600 font-semibold">NO SETUP</span> ·{' '}
+            <span className="text-rose-700 font-semibold">INVALIDATED</span>.
+            Sort by State, Cluster Density, or Risk to Didi.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
           <MarketToggle
             value={activeCategory}
             onChange={(cat) => {
@@ -363,18 +407,18 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
           />
 
           <Button
-            variant="outline"
+            variant="default"
             size="sm"
             onClick={() => triggerGlobalAssetLookup()}
           >
-            <Search className="h-3.5 w-3.5 text-emerald-600" />
-            Lookup Asset (⌘K)
+            <Search className="h-3.5 w-3.5" />
+            Lookup Any Asset (⌘K)
           </Button>
 
           {isScanning ? (
             <Button variant="destructive" size="sm" onClick={stopActiveScan}>
-              <Square className="h-3.5 w-3.5 fill-current" />
-              Stop ({progress.completed}/{progress.total})
+              <Square className="h-3.5 w-3.5" />
+              Stop Scan
             </Button>
           ) : (
             <Button
@@ -398,17 +442,17 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
             <span className="text-emerald-800 font-semibold flex items-center gap-2">
               <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-              Streaming MTF Polarity Batches: {progress.completed} /{' '}
-              {progress.total} assets ({progressPct}%)
+              Evaluating ATS States: {progress.completed} / {progress.total}{' '}
+              assets ({progressPct}%)
             </span>
             <span className="text-slate-600">
-              Live hits so far:{' '}
+              Active Setups:{' '}
               <strong className="text-emerald-700">
-                {supportWallsCount} Support
+                {step2Count} Step 2 Confirmed
               </strong>{' '}
               ·{' '}
-              <strong className="text-rose-700">
-                {resistanceWallsCount} Resistance
+              <strong className="text-amber-700">
+                {step1Count} Step 1 Wall
               </strong>
             </span>
           </div>
@@ -427,17 +471,17 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
           <CardContent className="p-4 flex items-center justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                BUY / STRONG BUY (&ge;70)
+                STEP 2 • Reversal Confirmed
               </p>
               <p className="mt-1 text-2xl font-bold font-mono text-emerald-700">
-                {supportWallsCount}{' '}
+                {step2Count}{' '}
                 <span className="text-xs font-normal text-slate-500">
-                  ({requirePhase3 ? 'Mode B' : 'Mode A'})
+                  (Conservative · Phase 3)
                 </span>
               </p>
             </div>
             <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-2.5 text-emerald-700">
-              <ArrowUpRight className="h-5 w-5" />
+              <Activity className="h-5 w-5" />
             </div>
           </CardContent>
         </Card>
@@ -446,17 +490,17 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
           <CardContent className="p-4 flex items-center justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                SELL / STRONG SELL (&ge;70)
+                STEP 1 • The Wall
               </p>
-              <p className="mt-1 text-2xl font-bold font-mono text-rose-700">
-                {resistanceWallsCount}{' '}
+              <p className="mt-1 text-2xl font-bold font-mono text-amber-700">
+                {step1Count}{' '}
                 <span className="text-xs font-normal text-slate-500">
-                  ({requirePhase3 ? 'Mode B' : 'Mode A'})
+                  (Aggressive · Phase 2)
                 </span>
               </p>
             </div>
-            <div className="rounded-lg bg-rose-50 border border-rose-200 p-2.5 text-rose-700">
-              <ArrowDownRight className="h-5 w-5" />
+            <div className="rounded-lg bg-amber-50 border border-amber-200 p-2.5 text-amber-700">
+              <Layers className="h-5 w-5" />
             </div>
           </CardContent>
         </Card>
@@ -465,17 +509,20 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
           <CardContent className="p-4 flex items-center justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Phase 3 Confirmed Clusters
+                Active BUY vs SELL Setups
               </p>
-              <p className="mt-1 text-2xl font-bold font-mono text-sky-700">
-                {step3PlusCount}{' '}
-                <span className="text-xs font-normal text-slate-500">
-                  / {rows.length} scanned
+              <p className="mt-1 text-2xl font-bold font-mono text-slate-900">
+                <span className="text-emerald-700">
+                  {activeBuySellCounts.buy}B
+                </span>
+                <span className="text-slate-300 mx-1.5">/</span>
+                <span className="text-rose-700">
+                  {activeBuySellCounts.sell}S
                 </span>
               </p>
             </div>
             <div className="rounded-lg bg-sky-50 border border-sky-200 p-2.5 text-sky-700">
-              <Activity className="h-5 w-5" />
+              <ArrowUpRight className="h-5 w-5" />
             </div>
           </CardContent>
         </Card>
@@ -486,28 +533,31 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                 Universe Coverage
               </p>
-              <p className="mt-1 text-lg font-bold font-mono text-slate-900">
-                {rows.length} Assets Live
+              <p className="mt-1 text-2xl font-bold font-mono text-slate-900">
+                {rows.length}{' '}
+                <span className="text-xs font-normal text-slate-500">
+                  Assets Scanned
+                </span>
               </p>
-              <p className="text-[11px] text-slate-500">
+              <p className="text-[11px] text-slate-400">
                 {scannedTimestamp
-                  ? `Last batch ${new Date(scannedTimestamp).toLocaleTimeString()}`
-                  : 'Initializing...'}
+                  ? `Updated ${new Date(scannedTimestamp).toLocaleTimeString()}`
+                  : 'Scanning...'}
               </p>
             </div>
-            <div className="rounded-lg bg-amber-50 border border-amber-200 p-2.5 text-amber-700">
+            <div className="rounded-lg bg-slate-100 border border-slate-200 p-2.5 text-slate-700">
               <Target className="h-5 w-5" />
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Universe Preset Selector + Custom Ticker Input */}
+      {/* Universe Selector + State Filter + Sort Controls */}
       <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 mr-1">
-              Univers:
+            <span className="text-xs font-semibold text-slate-500">
+              Universe:
             </span>
             <div className="flex flex-wrap items-center gap-1.5">
               {corePresets.map((preset) => {
@@ -588,95 +638,110 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
           </div>
         )}
 
-        {/* Direction Filter + <=1% Wall Toggle + Instant Filter Search */}
-        <div className="flex flex-col gap-2 border-t border-slate-200 pt-2.5 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-wrap items-center gap-1.5">
-            {(
-              [
-                { id: 'ALL', label: 'All Directions' },
-                { id: 'LONG', label: 'LONG • Green Support' },
-                { id: 'SHORT', label: 'SHORT • Red Resistance' },
-              ] as Array<{ id: DirectionFilter; label: string }>
-            ).map((opt) => {
-              const isSelected = uiPreferences.directionFilter === opt.id;
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => setDirectionFilter(opt.id)}
-                  className={cn(
-                    'rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors',
-                    isSelected
-                      ? opt.id === 'SHORT'
-                        ? 'border-rose-400 bg-rose-50 text-rose-800'
-                        : 'border-emerald-400 bg-emerald-50 text-emerald-800'
-                      : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                  )}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
+        {/* State Filters + Direction Filters + Sorting Controls + Search */}
+        <div className="flex flex-col gap-2.5 border-t border-slate-200 pt-3 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* State Filter Pills */}
+            <div className="inline-flex flex-wrap items-center rounded-lg border border-slate-200 bg-slate-100 p-0.5">
+              {(
+                [
+                  { id: 'ALL', label: 'All States' },
+                  { id: 'ACTIVE', label: 'Active (Step 1 & 2)' },
+                  { id: 'STEP2', label: 'Step 2 Confirmed' },
+                  { id: 'STEP1', label: 'Step 1 Wall' },
+                  { id: 'INVALIDATED', label: 'Invalidated' },
+                ] as Array<{ id: AtsStateFilter; label: string }>
+              ).map((stOpt) => {
+                const active = activeStateFilter === stOpt.id;
+                return (
+                  <button
+                    key={stOpt.id}
+                    type="button"
+                    onClick={() => setStateFilter(stOpt.id)}
+                    className={cn(
+                      'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                      active
+                        ? 'bg-white text-slate-900 shadow-sm font-semibold'
+                        : 'text-slate-600 hover:text-slate-900'
+                    )}
+                  >
+                    {stOpt.label}
+                  </button>
+                );
+              })}
+            </div>
 
-            <Button
-              variant={uiPreferences.onlyWallCandidates ? 'default' : 'outline'}
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => toggleUIPreference('onlyWallCandidates')}
-            >
-              <Filter className="h-3 w-3" />
-              {uiPreferences.onlyWallCandidates
-                ? 'Score >=40 (Watchlist+)'
-                : 'Showing All Scores'}
-            </Button>
-
-            {/* Execution Mode Toggle: Mode A (Aggressive — OFF) vs Mode B (Conservative Phase 3 — ON) */}
+            {/* Buy / Sell Direction Filter */}
             <div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-100 p-0.5">
-              <button
-                type="button"
-                onClick={() => {
-                  if (requirePhase3) {
-                    toggleUIPreference('requirePhase3Confirmation');
-                  }
-                }}
-                title="Mode A (Aggressive — Toggle OFF): Final Score = Base Score (Cluster + Didi Risk)"
-                className={cn(
-                  'rounded-md px-2.5 py-1 text-xs font-semibold transition-all',
-                  !requirePhase3
-                    ? 'bg-white text-slate-900 shadow-sm font-bold'
-                    : 'text-slate-600 hover:text-slate-900'
-                )}
-              >
-                Mode A: Aggressive (OFF)
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!requirePhase3) {
-                    toggleUIPreference('requirePhase3Confirmation');
-                  }
-                }}
-                title="Mode B (Conservative — Toggle ON): Requires Phase 3 Bollinger confirmation, otherwise applies -25 pt penalty"
-                className={cn(
-                  'rounded-md px-2.5 py-1 text-xs font-semibold transition-all',
-                  requirePhase3
-                    ? 'bg-sky-600 text-white shadow-sm font-bold'
-                    : 'text-slate-600 hover:text-slate-900'
-                )}
-              >
-                Mode B: Phase 3 Req (ON)
-              </button>
+              {(
+                [
+                  { id: 'ALL', label: 'All' },
+                  { id: 'LONG', label: 'Buy Only' },
+                  { id: 'SHORT', label: 'Sell Only' },
+                ] as Array<{ id: DirectionFilter; label: string }>
+              ).map((opt) => {
+                const active = uiPreferences.directionFilter === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setDirectionFilter(opt.id)}
+                    className={cn(
+                      'rounded-md px-2 py-1 text-xs font-medium transition-colors',
+                      active
+                        ? 'bg-white text-slate-900 shadow-sm font-semibold'
+                        : 'text-slate-600 hover:text-slate-900'
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          <div className="relative w-full sm:w-64">
-            <Search className="pointer-events-none absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-400" />
-            <Input
-              value={tableSearch}
-              onChange={(e) => setTableSearch(e.target.value)}
-              placeholder="Filter scanned results..."
-              className="h-7 pl-8 text-xs font-mono"
-            />
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Explicit Sort Mode Selector */}
+            <div className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-100 p-0.5">
+              <span className="px-2 text-[11px] font-semibold text-slate-500 flex items-center gap-1">
+                <ArrowDownUp className="h-3 w-3" />
+                Sort:
+              </span>
+              {(
+                [
+                  { id: 'STATE', label: 'ATS State' },
+                  { id: 'CLUSTER', label: 'Cluster Density ↓' },
+                  { id: 'RISK', label: 'Risk to Didi ↑' },
+                ] as Array<{ id: ScreenerSortKey; label: string }>
+              ).map((sOpt) => {
+                const active = activeSort === sOpt.id;
+                return (
+                  <button
+                    key={sOpt.id}
+                    type="button"
+                    onClick={() => setSortBy(sOpt.id)}
+                    className={cn(
+                      'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                      active
+                        ? 'bg-slate-900 text-white shadow-sm font-semibold'
+                        : 'text-slate-600 hover:text-slate-900'
+                    )}
+                  >
+                    {sOpt.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="relative w-full sm:w-56">
+              <Search className="pointer-events-none absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-400" />
+              <Input
+                value={tableSearch}
+                onChange={(e) => setTableSearch(e.target.value)}
+                placeholder="Filter ticker or state..."
+                className="h-7 pl-8 text-xs font-mono"
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -688,27 +753,21 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
         </div>
       )}
 
-      {/* Top Hit List Spotlight Strip */}
-      {topHitLeaders.length > 0 && (
+      {/* Active Setups Spotlight Strip (Step 2 & Step 1) */}
+      {topActiveSetups.length > 0 && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-              Top{' '}
-              {activeCategory === 'stocks'
-                ? 'Stock'
-                : activeCategory === 'crypto'
-                ? 'Crypto'
-                : 'Forex'}{' '}
-              Hit List — Ranked by Confidence Score
+              Active Setup Spotlight — Step 2 Confirmed &amp; Step 1 Wall
             </h2>
             <span className="text-[11px] text-slate-500">
               Click any card to open its 6-Pane ATS Charts
             </span>
           </div>
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-            {topHitLeaders.map((hit, idx) => {
-              const isShort = hit.direction === 'SHORT';
-              const hitMode = resolveExecutionModeResult(hit, requirePhase3);
+            {topActiveSetups.map((hit) => {
+              const isSell = hit.setupSide === 'SELL';
+              const badgeInfo = getStateBadgeStyle(hit.atsState, hit.setupSide);
               return (
                 <button
                   key={hit.symbol}
@@ -716,60 +775,44 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                   onClick={() => onSelectCandidate(hit.symbol, hit.category)}
                   className={cn(
                     'flex flex-col justify-between rounded-xl border p-3 text-left transition-all shadow-sm hover:-translate-y-0.5 bg-white',
-                    hitMode.finalScore >= 70 && isShort
-                      ? 'border-rose-300 bg-rose-50/40 hover:border-rose-500'
-                      : hitMode.finalScore >= 70 && hit.direction === 'LONG'
-                      ? 'border-emerald-300 bg-emerald-50/40 hover:border-emerald-500'
-                      : 'border-slate-200 hover:border-slate-400'
+                    hit.atsState === 'STEP 2: REVERSAL CONFIRMED'
+                      ? isSell
+                        ? 'border-rose-300 bg-rose-50/40 hover:border-rose-500'
+                        : 'border-emerald-300 bg-emerald-50/40 hover:border-emerald-500'
+                      : 'border-amber-300 bg-amber-50/40 hover:border-amber-500'
                   )}
                 >
                   <div className="flex items-center justify-between gap-2 w-full">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="font-mono text-[10px] text-slate-400">
-                        #{idx + 1}
-                      </span>
-                      <span className="font-mono text-sm font-bold text-slate-900 truncate">
-                        {hit.displaySymbol}
-                      </span>
-                    </div>
-                    <span
-                      className={cn(
-                        'rounded-md border px-1.5 py-0.5 font-mono text-xs font-extrabold shrink-0',
-                        hitMode.finalScore >= 70
-                          ? isShort
-                            ? 'border-rose-300 bg-rose-100 text-rose-800'
-                            : 'border-emerald-300 bg-emerald-100 text-emerald-800'
-                          : hitMode.finalScore >= 40
-                          ? 'border-amber-300 bg-amber-100 text-amber-800'
-                          : 'border-slate-200 bg-slate-100 text-slate-600'
-                      )}
-                    >
-                      {hitMode.finalScore}%
-                    </span>
-                  </div>
-
-                  <div className="mt-2 flex items-center justify-between text-xs font-mono">
-                    <span className="text-slate-800 font-semibold">
-                      {formatPrice(hit.livePrice, hit.category)}
+                    <span className="font-mono text-sm font-bold text-slate-900 truncate">
+                      {hit.displaySymbol}
                     </span>
                     <Badge
-                      variant={
-                        hitMode.finalScore >= 70
-                          ? isShort
-                            ? 'resistance'
-                            : 'support'
-                          : hitMode.finalScore >= 40
-                          ? 'amber'
-                          : 'outline'
-                      }
-                      className="text-[9px] px-1.5 py-0"
+                      variant={isSell ? 'resistance' : 'support'}
+                      className="text-[9px] px-1.5 py-0 font-mono"
                     >
-                      {hitMode.tradeAction}
+                      {hit.setupSide}
                     </Badge>
                   </div>
 
-                  <div className="mt-1.5 truncate font-mono text-[10px] text-slate-500 w-full">
-                    {hit.activeWallLabel}
+                  <div className="mt-2">
+                    <Badge
+                      variant={badgeInfo.variant}
+                      className="text-[9px] px-1.5 py-0 font-mono font-bold"
+                    >
+                      {hit.atsState === 'STEP 2: REVERSAL CONFIRMED'
+                        ? 'STEP 2: CONFIRMED'
+                        : 'STEP 1: THE WALL'}
+                    </Badge>
+                  </div>
+
+                  <div className="mt-2 flex items-center justify-between font-mono text-[11px] text-slate-700 w-full">
+                    <span className="font-bold">
+                      {hit.ClusterDensityCount}{' '}
+                      {hit.ClusterDensityCount === 1 ? 'Line' : 'Lines'}
+                    </span>
+                    <span className="text-rose-700 font-semibold">
+                      Didi {hit.RiskToDidi.toFixed(2)}%
+                    </span>
                   </div>
                 </button>
               );
@@ -778,19 +821,46 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
         </div>
       )}
 
-      {/* Main ATS Screener Table */}
+      {/* Main ATS State Detection Table */}
       <Card className="overflow-hidden border-slate-200">
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead>Ticker &amp; Price</TableHead>
-              <TableHead>Setup, Active Wall &amp; Thesis</TableHead>
+              <TableHead>Ticker &amp; Live Price</TableHead>
               <TableHead>
-                MTF Polarity Horizons (D · W · M · 3M · 6M · 12M)
+                <button
+                  type="button"
+                  onClick={() => setSortBy('STATE')}
+                  className="inline-flex items-center gap-1 font-semibold hover:text-slate-950"
+                >
+                  ATS State (Setup 1-2-3-4)
+                  {activeSort === 'STATE' && <span>↓</span>}
+                </button>
               </TableHead>
-              <TableHead>Confidence &amp; Steps</TableHead>
-              <TableHead>SL &amp; Didi Targets</TableHead>
-              <TableHead className="text-right">Explain / Charts</TableHead>
+              <TableHead>
+                <button
+                  type="button"
+                  onClick={() => setSortBy('CLUSTER')}
+                  className="inline-flex items-center gap-1 font-semibold hover:text-slate-950"
+                >
+                  Cluster Density (&le;1%)
+                  {activeSort === 'CLUSTER' && <span>↓</span>}
+                </button>
+              </TableHead>
+              <TableHead>
+                <button
+                  type="button"
+                  onClick={() => setSortBy('RISK')}
+                  className="inline-flex items-center gap-1 font-semibold hover:text-slate-950"
+                >
+                  Risk to Didi (%)
+                  {activeSort === 'RISK' && <span>↑</span>}
+                </button>
+              </TableHead>
+              <TableHead>
+                Unbroken MTF Horizons (D · W · M · 3M · 6M · 12M)
+              </TableHead>
+              <TableHead className="text-right">Details / Charts</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -808,17 +878,22 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                   colSpan={6}
                   className="py-12 text-center text-slate-500"
                 >
-                  No matching candidates under the active filters. Try switching
-                  Direction to &ldquo;All Directions&rdquo; or disabling
-                  &ldquo;Active &le;1% Walls Only&rdquo;.
+                  No assets match the current state filter. Switch to &ldquo;All
+                  States&rdquo; to inspect every scanned ticker.
                 </TableCell>
               </TableRow>
             ) : (
               displayedRows.map((row) => {
                 const isPositive24h = row.change24hPct >= 0;
                 const isExpanded = expandedSymbol === row.symbol;
-                const isShort = row.direction === 'SHORT';
-                const modeRes = resolveExecutionModeResult(row, requirePhase3);
+                const isSell = row.setupSide === 'SELL';
+                const isActive =
+                  row.atsState === 'STEP 1: THE WALL' ||
+                  row.atsState === 'STEP 2: REVERSAL CONFIRMED';
+                const badgeInfo = getStateBadgeStyle(
+                  row.atsState,
+                  row.setupSide
+                );
 
                 return (
                   <React.Fragment key={row.symbol}>
@@ -828,10 +903,12 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                       }
                       className={cn(
                         'cursor-pointer group transition-colors',
-                        modeRes.finalScore >= 70 && row.direction === 'LONG'
-                          ? 'bg-emerald-50/40 hover:bg-emerald-50/80'
-                          : modeRes.finalScore >= 70 && row.direction === 'SHORT'
-                          ? 'bg-rose-50/40 hover:bg-rose-50/80'
+                        row.atsState === 'STEP 2: REVERSAL CONFIRMED'
+                          ? isSell
+                            ? 'bg-rose-50/45 hover:bg-rose-50/80'
+                            : 'bg-emerald-50/45 hover:bg-emerald-50/80'
+                          : row.atsState === 'STEP 1: THE WALL'
+                          ? 'bg-amber-50/40 hover:bg-amber-50/80'
                           : 'hover:bg-slate-50'
                       )}
                     >
@@ -842,17 +919,17 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                             <span className="font-mono text-sm font-bold text-slate-900 group-hover:text-emerald-700 transition-colors">
                               {row.displaySymbol}
                             </span>
-                            {modeRes.finalScore >= 70 && (
-                              <span
-                                className={cn(
-                                  'inline-block h-2 w-2 rounded-full',
-                                  isShort ? 'bg-rose-600' : 'bg-emerald-600'
-                                )}
-                              />
+                            {isActive && (
+                              <Badge
+                                variant={isSell ? 'resistance' : 'support'}
+                                className="text-[9px] px-1.5 py-0 font-mono"
+                              >
+                                {row.setupSide}
+                              </Badge>
                             )}
                           </div>
                           {row.name && (
-                            <p className="text-[11px] text-slate-500 truncate max-w-[135px]">
+                            <p className="text-[11px] text-slate-500 truncate max-w-[140px]">
                               {row.name}
                             </p>
                           )}
@@ -875,106 +952,123 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                         </div>
                       </TableCell>
 
-                      {/* 2. Trade Action Output, Cluster Wall & Breakdown */}
-                      <TableCell className="align-top max-w-[330px]">
+                      {/* 2. Prominent ATS State Column */}
+                      <TableCell className="align-top max-w-[290px]">
                         <div className="space-y-1">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <Badge
-                              variant={
-                                modeRes.finalScore >= 70
-                                  ? isShort
-                                    ? 'resistance'
-                                    : 'support'
-                                  : modeRes.finalScore >= 40
-                                  ? 'amber'
-                                  : 'outline'
-                              }
-                              className={cn(
-                                'font-mono text-[10px]',
-                                modeRes.finalScore >= 85 && 'font-extrabold ring-1 ring-current'
-                              )}
-                            >
-                              {modeRes.tradeAction}
-                            </Badge>
-
-                            <Badge
-                              variant={
-                                row.pillar1ClusterScore > 0 && !row.isKnockedOut
-                                  ? isShort
-                                    ? 'resistance'
-                                    : 'support'
-                                  : 'outline'
-                              }
-                              className="font-mono text-xs"
-                            >
-                              {row.activeWallLabel}
-                            </Badge>
+                          <Badge
+                            variant={badgeInfo.variant}
+                            className="font-mono text-[11px] font-bold px-2 py-0.5"
+                          >
+                            {row.atsState}
+                          </Badge>
+                          <div className="text-[10px] font-mono font-semibold uppercase tracking-wider text-slate-500">
+                            {badgeInfo.subLabel}
                           </div>
-
-                          <p className="text-xs text-slate-700 leading-snug">
-                            {row.isKnockedOut
-                              ? `Knockout Rule: Exceeded Didi (${formatPrice(
-                                  row.didiStopPrice,
-                                  row.category
-                                )}) by ${row.didiDistancePct.toFixed(2)}% (>1%) → Score = 0`
-                              : row.pillar1ClusterScore > 0
-                              ? `Cluster ${row.pillar1ClusterScore}/60 + Didi Risk ${row.pillar2RiskScore}/40 (${row.didiDistancePct.toFixed(
-                                  2
-                                )}% to Didi)${
-                                  modeRes.phase3PenaltyApplied
-                                    ? ' − 25 Phase 2 Penalty'
-                                    : row.isPhase3
-                                    ? ' • Phase 3 Confirmed'
-                                    : ''
-                                }`
-                              : row.thesisHeadline}
+                          <p className="text-xs text-slate-700 leading-snug line-clamp-2">
+                            {row.thesisHeadline}
                           </p>
                         </div>
                       </TableCell>
 
-                      {/* 3. Multi-Horizon Indicator Matrix (D, W, M, 3M, 6M, 12M) */}
+                      {/* 3. Cluster Density Count Column */}
+                      <TableCell className="align-top">
+                        <div className="space-y-1 font-mono">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={cn(
+                                'inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-extrabold',
+                                row.ClusterDensityCount >= 3
+                                  ? 'border-emerald-400 bg-emerald-100 text-emerald-900'
+                                  : row.ClusterDensityCount >= 1
+                                  ? 'border-sky-300 bg-sky-50 text-sky-900'
+                                  : 'border-slate-200 bg-slate-100 text-slate-500'
+                              )}
+                            >
+                              {row.ClusterDensityCount}{' '}
+                              {row.ClusterDensityCount === 1 ? 'Line' : 'Lines'}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-600 truncate max-w-[165px]">
+                            {row.ClusterDensityCount > 0
+                              ? row.activeWallLabel
+                              : '0 unbroken <=1%'}
+                          </div>
+                        </div>
+                      </TableCell>
+
+                      {/* 4. Risk to Didi (%) Column */}
+                      <TableCell className="align-top">
+                        <div className="space-y-1 font-mono text-xs min-w-[135px]">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={cn(
+                                'text-sm font-extrabold',
+                                row.atsState === 'INVALIDATED'
+                                  ? 'text-rose-700 line-through'
+                                  : row.RiskToDidi <= 0.75
+                                  ? 'text-emerald-700'
+                                  : row.RiskToDidi <= 1.75
+                                  ? 'text-amber-700'
+                                  : 'text-slate-700'
+                              )}
+                            >
+                              {row.RiskToDidi.toFixed(2)}%
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            Didi:{' '}
+                            <span className="font-semibold text-slate-800">
+                              {formatPrice(row.didiPrice, row.category)}
+                            </span>
+                          </div>
+                        </div>
+                      </TableCell>
+
+                      {/* 5. Unbroken MTF Horizons (Jack Green/Red + Oggy Blue) */}
                       <TableCell className="align-top">
                         <div className="grid grid-cols-3 gap-1 sm:grid-cols-6 min-w-[250px]">
                           {ALL_TIMEFRAMES.map((tf) => {
                             const h = row.horizonMatrix[tf];
-                            if (!h || (h.greenCount === 0 && h.redCount === 0)) {
+                            if (
+                              !h ||
+                              (h.greenCount === 0 && h.redCount === 0)
+                            ) {
                               return (
                                 <div
                                   key={tf}
                                   className="rounded border border-slate-200 bg-slate-50 px-1.5 py-1 text-center font-mono text-[10px] text-slate-400"
                                 >
                                   <div>{tf}</div>
-                                  <div>N/A</div>
+                                  <div>—</div>
                                 </div>
                               );
                             }
 
                             const hasTouch = h.wallTouches.length > 0;
                             const touchPolarity = h.wallTouches[0]?.polarity;
-                            const mostlyGreen = h.greenCount > h.redCount;
-                            const mostlyRed = h.redCount > h.greenCount;
+                            const hasOggyTouch = h.wallTouches.some(
+                              (w) => w.family === 'Oggy'
+                            );
 
                             return (
                               <div
                                 key={tf}
-                                title={`${tf} Horizon — Green Supports (${
+                                title={`${tf} Unbroken Lines — Support (${
                                   h.greenCount
                                 }): ${
                                   h.greenLines.join(', ') || 'None'
-                                } | Red Resistances (${h.redCount}): ${
+                                } | Resistance (${h.redCount}): ${
                                   h.redLines.join(', ') || 'None'
-                                } | BB: ${h.bbState} | SAR: ${h.sarState}`}
+                                } | Blue Oggy: ${h.oggyCount}`}
                                 className={cn(
                                   'rounded border px-1.5 py-1 text-center font-mono text-[10px] transition-colors',
                                   hasTouch
-                                    ? touchPolarity === 'GREEN'
+                                    ? hasOggyTouch
+                                      ? 'border-blue-500 bg-blue-50 text-blue-950 ring-1 ring-blue-300'
+                                      : touchPolarity === 'GREEN'
                                       ? 'border-emerald-500 bg-emerald-100 text-emerald-950 ring-1 ring-emerald-400'
                                       : 'border-rose-500 bg-rose-100 text-rose-950 ring-1 ring-rose-400'
-                                    : mostlyGreen
-                                    ? 'border-emerald-200 bg-emerald-50/70 text-emerald-900'
-                                    : mostlyRed
-                                    ? 'border-rose-200 bg-rose-50/70 text-rose-900'
-                                    : 'border-amber-200 bg-amber-50/70 text-amber-900'
+                                    : 'border-slate-200 bg-white text-slate-800'
                                 )}
                               >
                                 <div className="font-bold text-[10px] flex items-center justify-center gap-0.5">
@@ -985,7 +1079,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                                   <span className="text-emerald-700">
                                     {h.greenCount}G
                                   </span>
-                                  <span className="text-slate-400">/</span>
+                                  <span className="text-slate-300">/</span>
                                   <span className="text-rose-700">
                                     {h.redCount}R
                                   </span>
@@ -996,148 +1090,10 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                         </div>
                         <div className="mt-1 flex items-center gap-2 text-[10px] text-slate-500 font-mono">
                           <span>{row.volatilitySignal}</span>
-                          <span>·</span>
-                          <span>D-SAR: {row.horizonMatrix.D?.sarState}</span>
                         </div>
                       </TableCell>
 
-                      {/* 4. Final Score & Pillar Breakdown */}
-                      <TableCell className="align-top">
-                        <div className="space-y-1.5 min-w-[165px]">
-                          <div className="flex items-center justify-between gap-2">
-                            <span
-                              className={cn(
-                                'font-mono text-sm font-bold',
-                                modeRes.finalScore >= 70
-                                  ? isShort
-                                    ? 'text-rose-700'
-                                    : 'text-emerald-700'
-                                  : modeRes.finalScore >= 40
-                                  ? 'text-amber-700'
-                                  : 'text-slate-500'
-                              )}
-                            >
-                              {modeRes.finalScore}%
-                            </span>
-                            <Badge
-                              variant={
-                                row.isPhase3 && row.pillar1ClusterScore > 0
-                                  ? 'support'
-                                  : row.pillar1ClusterScore > 0
-                                  ? 'amber'
-                                  : 'outline'
-                              }
-                              className="text-[10px] px-1.5 py-0"
-                            >
-                              {row.isKnockedOut
-                                ? 'KNOCKOUT'
-                                : row.isPhase3 && row.pillar1ClusterScore > 0
-                                ? 'PHASE 3'
-                                : row.pillar1ClusterScore > 0
-                                ? 'PHASE 2'
-                                : 'NO WALL'}
-                            </Badge>
-                          </div>
-
-                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
-                            <div
-                              className={cn(
-                                'h-full rounded-full transition-all',
-                                modeRes.finalScore >= 70
-                                  ? isShort
-                                    ? 'bg-rose-600'
-                                    : 'bg-emerald-600'
-                                  : modeRes.finalScore >= 40
-                                  ? 'bg-amber-500'
-                                  : 'bg-slate-400'
-                              )}
-                              style={{ width: `${modeRes.finalScore}%` }}
-                            />
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-1 text-[9px] font-mono font-semibold">
-                            <span
-                              className={cn(
-                                'rounded px-1 border',
-                                row.pillar1ClusterScore > 0 && !row.isKnockedOut
-                                  ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                                  : 'border-slate-200 text-slate-400'
-                              )}
-                            >
-                              C:{row.pillar1ClusterScore}/60
-                            </span>
-                            <span
-                              className={cn(
-                                'rounded px-1 border',
-                                row.pillar2RiskScore > 0 && !row.isKnockedOut
-                                  ? 'border-sky-300 bg-sky-50 text-sky-800'
-                                  : 'border-slate-200 text-slate-400'
-                              )}
-                            >
-                              Didi:{row.pillar2RiskScore}/40
-                            </span>
-                            {modeRes.phase3PenaltyApplied && (
-                              <span className="rounded px-1 border border-rose-300 bg-rose-50 text-rose-800">
-                                -25 Ph2
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </TableCell>
-
-                      {/* 5. Didi Stop-Loss & Targets */}
-                      <TableCell className="align-top">
-                        <div className="space-y-1 font-mono text-xs min-w-[180px]">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-slate-500">Didi SL:</span>
-                            <span className="text-rose-700 font-bold">
-                              {formatPrice(row.didiStopPrice, row.category)}
-                            </span>
-                            <span className="text-[10px] text-slate-500">
-                              ({row.didiDistancePct.toFixed(2)}%)
-                            </span>
-                          </div>
-
-                          {row.effectiveTargetTP1 ? (
-                            <div className="flex flex-wrap items-center gap-1">
-                              <span className="text-slate-500">TP1:</span>
-                              <span className="text-emerald-700 font-bold">
-                                {formatPrice(
-                                  row.effectiveTargetTP1.price,
-                                  row.category
-                                )}
-                              </span>
-                              <span className="text-[10px] text-slate-500">
-                                ({row.effectiveTargetTP1.label})
-                              </span>
-                            </div>
-                          ) : (
-                            <div className="text-slate-400 text-[11px]">
-                              TP1: Open Discovery
-                            </div>
-                          )}
-
-                          <div className="flex items-center gap-2 text-[10px] text-slate-500">
-                            {row.macroTargetTP2 && (
-                              <span>
-                                TP2: {row.macroTargetTP2.label} (
-                                {formatPrice(
-                                  row.macroTargetTP2.price,
-                                  row.category
-                                )}
-                                )
-                              </span>
-                            )}
-                            {row.riskRewardRatio !== null && (
-                              <span className="text-amber-700 font-bold">
-                                {row.riskRewardRatio.toFixed(2)}x R:R
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </TableCell>
-
-                      {/* 6. Explain Reasoning Toggle + Open Charts */}
+                      {/* 6. Gatekeeper Details & Open Charts */}
                       <TableCell className="align-top text-right">
                         <div className="inline-flex items-center gap-1">
                           <Button
@@ -1152,7 +1108,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                             }}
                           >
                             <Info className="h-3 w-3 text-sky-600" />
-                            Why?
+                            Checks
                             {isExpanded ? (
                               <ChevronUp className="h-3 w-3" />
                             ) : (
@@ -1191,36 +1147,33 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                       </TableCell>
                     </TableRow>
 
-                    {/* Expandable Quantitative Reasoning & 6-Horizon Indicator Drawer */}
+                    {/* Expandable Chronological State Gatekeeper Audit Drawer */}
                     {isExpanded && (
                       <TableRow className="bg-slate-50/90 hover:bg-slate-50/90">
                         <TableCell
                           colSpan={6}
                           className="p-4 border-b border-slate-200"
                         >
-                          <div className="space-y-4">
+                          <div className="space-y-3">
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                               <div>
-                                <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                                <h4 className="text-sm font-bold text-slate-900 flex flex-wrap items-center gap-2">
                                   <span>
-                                    ATS Quantitative Reasoning —{' '}
+                                    Chronological State Audit —{' '}
                                     {row.displaySymbol}
                                   </span>
-                                    <Badge
-                                      variant={
-                                        modeRes.finalScore >= 70
-                                          ? row.direction === 'SHORT'
-                                            ? 'resistance'
-                                            : 'support'
-                                          : modeRes.finalScore >= 40
-                                          ? 'amber'
-                                          : 'outline'
-                                      }
-                                      className="font-mono text-[10px]"
-                                    >
-                                      {modeRes.tradeAction} ({modeRes.finalScore}
-                                      /100)
-                                    </Badge>
+                                  <Badge
+                                    variant={badgeInfo.variant}
+                                    className="font-mono text-[10px]"
+                                  >
+                                    {row.atsState}
+                                  </Badge>
+                                  <span className="font-mono text-xs text-slate-600">
+                                    ClusterDensityCount:{' '}
+                                    <strong>{row.ClusterDensityCount}</strong> ·
+                                    RiskToDidi:{' '}
+                                    <strong>{row.RiskToDidi.toFixed(2)}%</strong>
+                                  </span>
                                 </h4>
                                 <ul className="mt-2 space-y-1 text-xs text-slate-700 list-disc pl-5">
                                   {row.reasoningBullets.map((bullet, bIdx) => (
@@ -1234,81 +1187,10 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                                 onClick={() =>
                                   onSelectCandidate(row.symbol, row.category)
                                 }
-                                className="shrink-0"
                               >
                                 Open 6-Pane ATS Charts
-                                <ArrowUpRight className="h-4 w-4" />
+                                <ArrowUpRight className="h-3.5 w-3.5" />
                               </Button>
-                            </div>
-
-                            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-                              {ALL_TIMEFRAMES.map((tf) => {
-                                const h = row.horizonMatrix[tf];
-                                return (
-                                  <div
-                                    key={tf}
-                                    className="rounded-lg border border-slate-200 bg-white p-2.5 space-y-1.5 text-xs shadow-sm"
-                                  >
-                                    <div className="flex items-center justify-between border-b border-slate-100 pb-1">
-                                      <span className="font-mono font-bold text-slate-900">
-                                        {tf} Horizon
-                                      </span>
-                                      <span className="font-mono text-[10px] font-semibold">
-                                        <span className="text-emerald-700">
-                                          {h.greenCount}G
-                                        </span>{' '}
-                                        /{' '}
-                                        <span className="text-rose-700">
-                                          {h.redCount}R
-                                        </span>
-                                      </span>
-                                    </div>
-
-                                    {h.wallTouches.length > 0 && (
-                                      <div className="rounded bg-amber-50 border border-amber-200 px-1.5 py-1 font-mono text-[10px] text-amber-900">
-                                        <span className="font-bold">
-                                          ★ Wall Touch (&le;1%):{' '}
-                                        </span>
-                                        {h.wallTouches
-                                          .map(
-                                            (w) =>
-                                              `${w.shortName} (${w.absDistancePct.toFixed(
-                                                2
-                                              )}%)`
-                                          )
-                                          .join(', ')}
-                                      </div>
-                                    )}
-
-                                    <div className="text-[11px]">
-                                      <span className="text-emerald-700 font-semibold">
-                                        Supports:{' '}
-                                      </span>
-                                      <span className="font-mono text-slate-700">
-                                        {h.greenLines.length > 0
-                                          ? h.greenLines.join(', ')
-                                          : 'None'}
-                                      </span>
-                                    </div>
-
-                                    <div className="text-[11px]">
-                                      <span className="text-rose-700 font-semibold">
-                                        Resistances:{' '}
-                                      </span>
-                                      <span className="font-mono text-slate-700">
-                                        {h.redLines.length > 0
-                                          ? h.redLines.join(', ')
-                                          : 'None'}
-                                      </span>
-                                    </div>
-
-                                    <div className="flex items-center justify-between pt-1 border-t border-slate-100 font-mono text-[10px] text-slate-500">
-                                      <span>BB: {h.bbState}</span>
-                                      <span>SAR: {h.sarState}</span>
-                                    </div>
-                                  </div>
-                                );
-                              })}
                             </div>
                           </div>
                         </TableCell>
@@ -1322,13 +1204,13 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
         </Table>
 
         {filteredRows.length > visibleLimit && (
-          <div className="flex items-center justify-center border-t border-slate-200 p-3 bg-slate-50">
+          <div className="flex items-center justify-center border-t border-slate-200 bg-slate-50 p-3">
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setVisibleLimit((prev) => prev + 100)}
+              onClick={() => setVisibleLimit((prev) => prev + 60)}
             >
-              Show More ({visibleLimit} of {filteredRows.length} shown)
+              Show More ({visibleLimit} of {filteredRows.length} assets shown)
             </Button>
           </div>
         )}
