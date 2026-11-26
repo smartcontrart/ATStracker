@@ -171,8 +171,13 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
   const wallTypeByTf = useMemo(() => {
     const map = new Map<Timeframe, 'SUPPORT' | 'RESISTANCE'>();
     if (!payload) return map;
+    const activeSideType =
+      payload.screener.setupSide === 'SELL' ? 'RESISTANCE' : 'SUPPORT';
+    for (const m of payload.screener.matchedHtfLevels || []) {
+      map.set(m.timeframe, activeSideType);
+    }
     for (const l of payload.screener.confluentWallLines) {
-      map.set(l.timeframe, 'SUPPORT');
+      if (!map.has(l.timeframe)) map.set(l.timeframe, 'SUPPORT');
     }
     for (const l of payload.screener.confluentResistanceLines) {
       if (!map.has(l.timeframe) || payload.screener.direction === 'SHORT') {
@@ -297,6 +302,22 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
                   </span>
                 </div>
 
+                {payload.screener.bbExitTimeframe &&
+                  payload.screener.highestHtfTimeframe && (
+                    <span
+                      className={cn(
+                        'inline-flex items-center rounded px-2 py-0.5 font-mono text-xs font-extrabold text-white',
+                        payload.screener.setupSide === 'SELL'
+                          ? 'bg-rose-700'
+                          : 'bg-emerald-700'
+                      )}
+                    >
+                      {payload.screener.bbExitTimeframe} BB Exit →{' '}
+                      {payload.screener.highestHtfTimeframe}{' '}
+                      {payload.screener.setupSide === 'SELL' ? 'RES' : 'SUP'}
+                    </span>
+                  )}
+
                 <Badge
                   variant={stateBadgeVariant(
                     payload.screener.atsState,
@@ -388,13 +409,13 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
               <div className="grid grid-cols-2 gap-2 font-mono text-xs">
                 <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
                   <div className="text-[10px] uppercase tracking-wider text-slate-400">
-                    Cluster Density (&le;1%)
+                    HTF S/R Levels (SAR/MM/J/O)
                   </div>
                   <div className="mt-0.5 font-bold text-slate-900">
                     {payload.screener.ClusterDensityCount}{' '}
                     {payload.screener.ClusterDensityCount === 1
-                      ? 'Unbroken Line'
-                      : 'Unbroken Lines'}
+                      ? 'Matched Level'
+                      : 'Matched Levels'}
                   </div>
                 </div>
 
@@ -452,9 +473,33 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
                 })}
               </div>
               <p className="text-xs text-slate-700 leading-snug">
-                <span className="font-semibold text-slate-900">State Logic: </span>
+                <span className="font-semibold text-slate-900">Setup Logic: </span>
                 {payload.screener.thesisHeadline}
               </p>
+              {payload.screener.matchedHtfLevels &&
+                payload.screener.matchedHtfLevels.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1 pt-0.5 font-mono">
+                    {payload.screener.matchedHtfLevels.map((lvl, idx) => (
+                      <span
+                        key={`${lvl.label}-${idx}`}
+                        className={cn(
+                          'rounded border px-1.5 py-0.5 text-[10px] font-bold',
+                          lvl.kind === 'Oggy'
+                            ? 'border-blue-300 bg-blue-50 text-blue-800'
+                            : lvl.kind === 'SAR'
+                            ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
+                            : lvl.kind === 'MM7' || lvl.kind === 'MM20'
+                            ? 'border-sky-300 bg-sky-50 text-sky-900'
+                            : isShortSetup
+                            ? 'border-rose-300 bg-rose-50 text-rose-800'
+                            : 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                        )}
+                      >
+                        {lvl.label} ({formatPrice(lvl.price, payload.category)})
+                      </span>
+                    ))}
+                  </div>
+                )}
             </div>
           </div>
         )}
@@ -624,10 +669,11 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
                         : 'bg-slate-200 text-slate-600'
                     )}
                   >
-                    {st === 'STEP 2: REVERSAL CONFIRMED'
-                      ? `S2·${dens}L`
-                      : st === 'STEP 1: THE WALL'
-                      ? `S1·${dens}L`
+                    {st === 'STEP 2: REVERSAL CONFIRMED' ||
+                    st === 'STEP 1: THE WALL'
+                      ? info?.bbExitTimeframe && info?.highestHtfTimeframe
+                        ? `${info.bbExitTimeframe}→${info.highestHtfTimeframe}`
+                        : `S${st === 'STEP 2: REVERSAL CONFIRMED' ? '2' : '1'}·${dens}L`
                       : st === 'INVALIDATED'
                       ? 'INVAL'
                       : 'NONE'}

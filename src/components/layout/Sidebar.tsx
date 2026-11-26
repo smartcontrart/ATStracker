@@ -8,7 +8,7 @@ import { MarketToggle } from '@/components/ui/market-toggle';
 import { compareScreenerResults } from '@/lib/atsScreener';
 import { cn } from '@/lib/utils';
 import { type ActiveDashboardView, useATSStore } from '@/store/useATSStore';
-import type { AssetCategory, AtsState } from '@/types/ats';
+import type { AssetCategory, AtsState, Timeframe } from '@/types/ats';
 
 interface SidebarProps {
   onNavigateView: (view: ActiveDashboardView) => void;
@@ -22,12 +22,24 @@ const CATEGORY_HIT_TITLES: Record<AssetCategory, string> = {
   forex: 'Top FX Setups',
 };
 
-function shortStateTag(state: AtsState | null, density: number): string {
+function shortStateTag(
+  state: AtsState | null,
+  density: number,
+  bbExitTf?: Timeframe | null,
+  highestHtf?: Timeframe | null
+): string {
   if (!state) return '—';
-  if (state === 'STEP 2: REVERSAL CONFIRMED') return `STEP 2 · ${density}L`;
-  if (state === 'STEP 1: THE WALL') return `STEP 1 · ${density}L`;
+  if (
+    (state === 'STEP 2: REVERSAL CONFIRMED' || state === 'STEP 1: THE WALL') &&
+    bbExitTf &&
+    highestHtf
+  ) {
+    return `${bbExitTf}→${highestHtf}`;
+  }
+  if (state === 'STEP 2: REVERSAL CONFIRMED') return `S2 · ${density}L`;
+  if (state === 'STEP 1: THE WALL') return `S1 · ${density}L`;
   if (state === 'INVALIDATED') return 'INVAL';
-  return density > 0 ? `${density}L` : 'NONE';
+  return 'NONE';
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -62,7 +74,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       (r) => r.symbol === selectedAsset.symbol
     );
     return found
-      ? shortStateTag(found.atsState, found.ClusterDensityCount)
+      ? shortStateTag(
+          found.atsState,
+          found.ClusterDensityCount,
+          found.bbExitTimeframe,
+          found.highestHtfTimeframe
+        )
       : null;
   }, [screenerResults, selectedAsset.category, selectedAsset.symbol]);
 
@@ -79,6 +96,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         riskToDidi: r.RiskToDidi,
         direction: r.direction,
         wallLabel: r.activeWallLabel,
+        bbExitTimeframe: r.bbExitTimeframe,
+        highestHtfTimeframe: r.highestHtfTimeframe,
       }));
     }
     return watchlists[activeCategory].slice(0, 20).map((sym) => ({
@@ -89,6 +108,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       riskToDidi: 0,
       direction: 'NEUTRAL' as const,
       wallLabel: '',
+      bbExitTimeframe: null as Timeframe | null,
+      highestHtfTimeframe: null as Timeframe | null,
     }));
   }, [activeCategory, screenerResults, uiPreferences.sortBy, watchlists]);
 
@@ -253,7 +274,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       badgeClass
                     )}
                   >
-                    {shortStateTag(item.atsState, item.density)}
+                    {shortStateTag(
+                      item.atsState,
+                      item.density,
+                      item.bbExitTimeframe,
+                      item.highestHtfTimeframe
+                    )}
                   </span>
                 ) : screenerLoading[activeCategory] ? (
                   <Loader2 className="h-3 w-3 animate-spin text-slate-400 shrink-0" />

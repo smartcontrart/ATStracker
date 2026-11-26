@@ -342,9 +342,18 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
       }
 
       if (query) {
+        const matchedStr = (r.matchedHtfLevels || [])
+          .map((m) => `${m.label} ${m.kind}`)
+          .join(' ');
+        const tfPair =
+          r.bbExitTimeframe && r.highestHtfTimeframe
+            ? `${r.bbExitTimeframe} ${r.highestHtfTimeframe} ${r.bbExitTimeframe}->${r.highestHtfTimeframe}`
+            : '';
         const hay = `${r.symbol} ${r.displaySymbol} ${r.name || ''} ${
           r.atsState
-        } ${r.activeWallLabel} ${r.thesisHeadline}`.toUpperCase();
+        } ${tfPair} ${matchedStr} ${r.activeWallLabel} ${
+          r.thesisHeadline
+        }`.toUpperCase();
         if (!hay.includes(query)) return false;
       }
       return true;
@@ -375,25 +384,26 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
-              ATS State Detection Screener
+              ATS Multi-Timeframe BB-Exit Screener
             </h1>
             <Badge variant="support" className="font-mono">
-              SETUP 1-2-3-4 ENGINE
+              BB EXIT + HTF S/R
             </Badge>
           </div>
           <p className="mt-1 text-xs text-slate-600 sm:text-sm">
-            Chronological state classification:{' '}
-            <span className="text-emerald-700 font-semibold">
-              STEP 2: REVERSAL CONFIRMED
+            Flags price exiting a Bollinger Band (
+            <span className="text-emerald-700 font-semibold">Bottom = Buy</span>{' '}
+            /{' '}
+            <span className="text-rose-700 font-semibold">Top = Sell</span>)
+            into a strictly higher-timeframe{' '}
+            <span className="font-semibold text-slate-800">
+              SAR, MM7, MM20, Jack, or Oggy
             </span>{' '}
-            ·{' '}
-            <span className="text-amber-700 font-semibold">
-              STEP 1: THE WALL
-            </span>{' '}
-            ·{' '}
-            <span className="text-slate-600 font-semibold">NO SETUP</span> ·{' '}
-            <span className="text-rose-700 font-semibold">INVALIDATED</span>.
-            Sort by State, Cluster Density, or Risk to Didi.
+            level. Ranked highest timeframe first (
+            <span className="font-mono text-slate-800">
+              6M→12M &gt; 3M→6M/12M &gt; M→3M &gt; W→M &gt; D→W
+            </span>
+            ).
           </p>
         </div>
 
@@ -709,8 +719,8 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
               </span>
               {(
                 [
-                  { id: 'STATE', label: 'ATS State' },
-                  { id: 'CLUSTER', label: 'Cluster Density ↓' },
+                  { id: 'STATE', label: 'Higher TF ↓' },
+                  { id: 'CLUSTER', label: 'S/R Levels ↓' },
                   { id: 'RISK', label: 'Risk to Didi ↑' },
                 ] as Array<{ id: ScreenerSortKey; label: string }>
               ).map((sOpt) => {
@@ -794,21 +804,39 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                     </Badge>
                   </div>
 
-                  <div className="mt-2">
+                  <div className="mt-2 flex flex-wrap items-center gap-1">
+                    {hit.bbExitTimeframe && hit.highestHtfTimeframe && (
+                      <span className="rounded bg-slate-900 px-1.5 py-0.5 font-mono text-[10px] font-bold text-white">
+                        {hit.bbExitTimeframe} BB → {hit.highestHtfTimeframe}
+                      </span>
+                    )}
                     <Badge
                       variant={badgeInfo.variant}
                       className="text-[9px] px-1.5 py-0 font-mono font-bold"
                     >
                       {hit.atsState === 'STEP 2: REVERSAL CONFIRMED'
-                        ? 'STEP 2: CONFIRMED'
-                        : 'STEP 1: THE WALL'}
+                        ? 'PHASE 3'
+                        : 'PHASE 2'}
                     </Badge>
                   </div>
+
+                  {hit.matchedHtfLevels && hit.matchedHtfLevels.length > 0 && (
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {hit.matchedHtfLevels.slice(0, 2).map((lvl, idx) => (
+                        <span
+                          key={`${lvl.label}-${idx}`}
+                          className="rounded border border-slate-200 bg-white/90 px-1 py-0.5 font-mono text-[9px] font-semibold text-slate-700"
+                        >
+                          {lvl.label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
 
                   <div className="mt-2 flex items-center justify-between font-mono text-[11px] text-slate-700 w-full">
                     <span className="font-bold">
                       {hit.ClusterDensityCount}{' '}
-                      {hit.ClusterDensityCount === 1 ? 'Line' : 'Lines'}
+                      {hit.ClusterDensityCount === 1 ? 'Level' : 'Levels'}
                     </span>
                     <span className="text-rose-700 font-semibold">
                       Didi {hit.RiskToDidi.toFixed(2)}%
@@ -833,7 +861,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                   onClick={() => setSortBy('STATE')}
                   className="inline-flex items-center gap-1 font-semibold hover:text-slate-950"
                 >
-                  ATS State (Setup 1-2-3-4)
+                  BB Exit → HTF S/R
                   {activeSort === 'STATE' && <span>↓</span>}
                 </button>
               </TableHead>
@@ -843,7 +871,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                   onClick={() => setSortBy('CLUSTER')}
                   className="inline-flex items-center gap-1 font-semibold hover:text-slate-950"
                 >
-                  Cluster Density (&le;1%)
+                  HTF S/R Levels (SAR/MM/Jack/Oggy)
                   {activeSort === 'CLUSTER' && <span>↓</span>}
                 </button>
               </TableHead>
@@ -952,17 +980,30 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                         </div>
                       </TableCell>
 
-                      {/* 2. Prominent ATS State Column */}
-                      <TableCell className="align-top max-w-[290px]">
+                      {/* 2. Prominent BB Exit -> HTF S/R State Column */}
+                      <TableCell className="align-top max-w-[300px]">
                         <div className="space-y-1">
-                          <Badge
-                            variant={badgeInfo.variant}
-                            className="font-mono text-[11px] font-bold px-2 py-0.5"
-                          >
-                            {row.atsState}
-                          </Badge>
-                          <div className="text-[10px] font-mono font-semibold uppercase tracking-wider text-slate-500">
-                            {badgeInfo.subLabel}
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {isActive &&
+                              row.bbExitTimeframe &&
+                              row.highestHtfTimeframe && (
+                                <span
+                                  className={cn(
+                                    'inline-flex items-center rounded px-2 py-0.5 font-mono text-[11px] font-extrabold text-white',
+                                    isSell ? 'bg-rose-700' : 'bg-emerald-700'
+                                  )}
+                                >
+                                  {row.bbExitTimeframe} BB →{' '}
+                                  {row.highestHtfTimeframe}{' '}
+                                  {isSell ? 'RES' : 'SUP'}
+                                </span>
+                              )}
+                            <Badge
+                              variant={badgeInfo.variant}
+                              className="font-mono text-[10px] font-bold px-1.5 py-0.5"
+                            >
+                              {row.atsState}
+                            </Badge>
                           </div>
                           <p className="text-xs text-slate-700 leading-snug line-clamp-2">
                             {row.thesisHeadline}
@@ -970,9 +1011,9 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                         </div>
                       </TableCell>
 
-                      {/* 3. Cluster Density Count Column */}
+                      {/* 3. Matched Higher-TF S/R Levels Column (SAR, MM7, MM20, Jack, Oggy) */}
                       <TableCell className="align-top">
-                        <div className="space-y-1 font-mono">
+                        <div className="space-y-1.5 font-mono">
                           <div className="flex items-center gap-1.5">
                             <span
                               className={cn(
@@ -985,14 +1026,49 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                               )}
                             >
                               {row.ClusterDensityCount}{' '}
-                              {row.ClusterDensityCount === 1 ? 'Line' : 'Lines'}
+                              {row.ClusterDensityCount === 1
+                                ? 'Level'
+                                : 'Levels'}
                             </span>
                           </div>
-                          <div className="text-[11px] text-slate-600 truncate max-w-[165px]">
-                            {row.ClusterDensityCount > 0
-                              ? row.activeWallLabel
-                              : '0 unbroken <=1%'}
-                          </div>
+                          {row.matchedHtfLevels &&
+                          row.matchedHtfLevels.length > 0 ? (
+                            <div className="flex flex-wrap gap-1 max-w-[200px]">
+                              {row.matchedHtfLevels.slice(0, 4).map((lvl, idx) => (
+                                <span
+                                  key={`${lvl.label}-${idx}`}
+                                  title={`${lvl.label} @ ${formatPrice(
+                                    lvl.price,
+                                    row.category
+                                  )} (${lvl.distancePct.toFixed(2)}% away)`}
+                                  className={cn(
+                                    'rounded border px-1.5 py-0.5 text-[10px] font-bold',
+                                    lvl.kind === 'Oggy'
+                                      ? 'border-blue-300 bg-blue-50 text-blue-800'
+                                      : lvl.kind === 'SAR'
+                                      ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
+                                      : lvl.kind === 'MM7' ||
+                                        lvl.kind === 'MM20'
+                                      ? 'border-sky-300 bg-sky-50 text-sky-900'
+                                      : isSell
+                                      ? 'border-rose-300 bg-rose-50 text-rose-800'
+                                      : 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                                  )}
+                                >
+                                  {lvl.label}
+                                </span>
+                              ))}
+                              {row.matchedHtfLevels.length > 4 && (
+                                <span className="text-[10px] text-slate-500">
+                                  +{row.matchedHtfLevels.length - 4}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="text-[11px] text-slate-500">
+                              No HTF S/R match
+                            </div>
+                          )}
                         </div>
                       </TableCell>
 

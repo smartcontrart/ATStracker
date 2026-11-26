@@ -5,10 +5,9 @@ import type {
   ATSBaseline,
   AtsState,
   AtsStateDetectionResult,
-  BollingerBandPoint,
   DidiTarget,
   MacroTargetTP2,
-  OHLCVBar,
+  MatchedHTFLevel,
   ScreenerResult,
   SetupConfirmationStatus,
   SetupDirection,
@@ -18,11 +17,29 @@ import type {
 } from '../types/ats.ts';
 
 /**
- * Knockout Rule tolerance: Didi must be breached by MORE than 1%
- * (`livePrice < Didi * 0.99` for Buy, `livePrice > Didi * 1.01` for Sell)
- * to return status `INVALIDATED`.
+ * Timeframe hierarchy rank: higher timeframe setups ALWAYS outrank lower timeframe setups.
+ * (e.g., 3M BB exit + 6M/12M resistance >> D BB exit + W resistance)
  */
-export const DIDI_KNOCKOUT_BUFFER = 0.01;
+export const TIMEFRAME_RANK: Record<Timeframe, number> = {
+  D: 0,
+  W: 1,
+  M: 2,
+  '3M': 3,
+  '6M': 4,
+  '12M': 5,
+};
+
+/** Trigger timeframes scanned from HIGHEST to LOWEST (12M has no higher TF above it) */
+const TRIGGER_TIMEFRAMES_DESC: readonly Timeframe[] = [
+  '6M',
+  '3M',
+  'M',
+  'W',
+  'D',
+] as const;
+
+/** Maximum proximity % to a Higher-Timeframe Support/Resistance (SAR, MM7, MM20, Jack, Oggy) */
+const HTF_SR_PROXIMITY_TOL = 0.015; // 1.5%
 
 export const ATS_STATE_SORT_PRIORITY: Record<AtsState, number> = {
   'STEP 2: REVERSAL CONFIRMED': 3,
@@ -33,34 +50,45 @@ export const ATS_STATE_SORT_PRIORITY: Record<AtsState, number> = {
 
 export type ScreenerSortKey = 'STATE' | 'CLUSTER' | 'RISK';
 
+/**
+ * Sorts screener results with Higher-Timeframe BB-Exit + HTF S/R setups always at the top:
+ * - Default ('STATE'): Active setups first -> Highest `setupHierarchyRank` (trigger TF -> HTF S/R TF) -> ClusterDensityCount (desc) -> RiskToDidi (asc).
+ * - 'CLUSTER': ClusterDensityCount (desc) -> setupHierarchyRank (desc) -> RiskToDidi (asc).
+ * - 'RISK': Active setups first -> RiskToDidi (asc) -> setupHierarchyRank (desc).
+ */
 export function compareScreenerResults(
   a: ScreenerResult,
   b: ScreenerResult,
   sortKey: ScreenerSortKey = 'STATE'
 ): number {
+  const aActive =
+    a.atsState === 'STEP 1: THE WALL' ||
+    a.atsState === 'STEP 2: REVERSAL CONFIRMED';
+  const bActive =
+    b.atsState === 'STEP 1: THE WALL' ||
+    b.atsState === 'STEP 2: REVERSAL CONFIRMED';
+
   if (sortKey === 'CLUSTER') {
     if (b.ClusterDensityCount !== a.ClusterDensityCount) {
       return b.ClusterDensityCount - a.ClusterDensityCount;
     }
-    const stateDiff =
-      ATS_STATE_SORT_PRIORITY[b.atsState] - ATS_STATE_SORT_PRIORITY[a.atsState];
-    if (stateDiff !== 0) return stateDiff;
+    if (b.setupHierarchyRank !== a.setupHierarchyRank) {
+      return b.setupHierarchyRank - a.setupHierarchyRank;
+    }
     return a.RiskToDidi - b.RiskToDidi;
   }
 
   if (sortKey === 'RISK') {
-    const aActive =
-      a.atsState === 'STEP 1: THE WALL' ||
-      a.atsState === 'STEP 2: REVERSAL CONFIRMED';
-    const bActive =
-      b.atsState === 'STEP 1: THE WALL' ||
-      b.atsState === 'STEP 2: REVERSAL CONFIRMED';
     if (aActive !== bActive) return aActive ? -1 : 1;
     if (a.RiskToDidi !== b.RiskToDidi) return a.RiskToDidi - b.RiskToDidi;
-    return b.ClusterDensityCount - a.ClusterDensityCount;
+    return b.setupHierarchyRank - a.setupHierarchyRank;
   }
 
-  // Default: STATE -> ClusterDensityCount (desc) -> RiskToDidi (asc)
+  // Default: Active setups first -> Highest Timeframe Hierarchy Rank -> Cluster Density -> Tightest Risk to Didi
+  if (aActive !== bActive) return aActive ? -1 : 1;
+  if (b.setupHierarchyRank !== a.setupHierarchyRank) {
+    return b.setupHierarchyRank - a.setupHierarchyRank;
+  }
   const stateDiff =
     ATS_STATE_SORT_PRIORITY[b.atsState] - ATS_STATE_SORT_PRIORITY[a.atsState];
   if (stateDiff !== 0) return stateDiff;
@@ -77,15 +105,6 @@ const SHORT_KEY_LABELS: Record<string, string> = {
   Oggy_Minus1: 'Oggy-1',
   Oggy_0: 'Oggy0',
   Oggy_Plus1: 'Oggy+1',
-};
-
-const TIMEFRAME_ORDER_WEIGHT: Record<Timeframe, number> = {
-  D: 0,
-  W: 1,
-  M: 2,
-  '3M': 3,
-  '6M': 4,
-  '12M': 5,
 };
 
 function fmtNum(val: number, category: AssetCategory): string {
@@ -128,7 +147,7 @@ function buildHorizonMatrix(
       }
 
       const absDistPct = (Math.abs(livePrice - l.price) / livePrice) * 100;
-      if (absDistPct <= 1.0) {
+      if (absDistPct <= 1.5) {
         wallTouches.push({
           shortName,
           label: l.label,
@@ -174,13 +193,195 @@ function buildHorizonMatrix(
 }
 
 /**
- * Core Chronological ATS State Detection Engine (`detectAtsSetup`):
+ * Finds all valid Higher-Timeframe (`htf > triggerTf`) Supports (for Bottom BB Exit)
+ * or Resistances (for Top BB Exit) among: SAR, MM7, MM20, Jack, and Oggy.
+ */
+function findHigherTimeframeSR(params: {
+  triggerTf: Timeframe;
+  side: 'BUY' | 'SELL';
+  livePrice: number;
+  refExtremePrice: number;
+  timeframes: Record<Timeframe, TimeframeATSData>;
+}): {
+  matchedLevels: MatchedHTFLevel[];
+  matchedBaselines: ATSBaseline[];
+} {
+  const { triggerTf, side, livePrice, refExtremePrice, timeframes } = params;
+  const triggerRank = TIMEFRAME_RANK[triggerTf];
+  const higherTfs = ALL_TIMEFRAMES.filter(
+    (tf) => TIMEFRAME_RANK[tf] > triggerRank
+  );
+
+  const matchedLevels: MatchedHTFLevel[] = [];
+  const matchedBaselines: ATSBaseline[] = [];
+
+  for (const htf of higherTfs) {
+    const htfData = timeframes[htf];
+
+    // 1. Unbroken Jack & Oggy baselines (strictly excluding pierced lines)
+    const unbroken = flattenTimeframeBaselines(htfData.Jack, htfData.Oggy, true);
+    for (const line of unbroken) {
+      if (side === 'BUY') {
+        if (line.polarity === 'GREEN' && line.price <= livePrice) {
+          const distLive = (livePrice - line.price) / livePrice;
+          const distExt = Math.abs(refExtremePrice - line.price) / livePrice;
+          if (distLive <= HTF_SR_PROXIMITY_TOL || distExt <= HTF_SR_PROXIMITY_TOL) {
+            matchedLevels.push({
+              label: line.label,
+              timeframe: htf,
+              kind: line.family,
+              price: line.price,
+              distancePct: distLive * 100,
+            });
+            matchedBaselines.push(line);
+          }
+        }
+      } else {
+        if (line.polarity === 'RED' && line.price >= livePrice) {
+          const distLive = (line.price - livePrice) / livePrice;
+          const distExt = Math.abs(line.price - refExtremePrice) / livePrice;
+          if (distLive <= HTF_SR_PROXIMITY_TOL || distExt <= HTF_SR_PROXIMITY_TOL) {
+            matchedLevels.push({
+              label: line.label,
+              timeframe: htf,
+              kind: line.family,
+              price: line.price,
+              distancePct: distLive * 100,
+            });
+            matchedBaselines.push(line);
+          }
+        }
+      }
+    }
+
+    // 2. MM7 (SMA 7) — Green/rising for Support, Red/falling for Resistance
+    if (htfData.latestSMA7 && htfData.latestSMA7.value > 0) {
+      const m7 = htfData.latestSMA7.value;
+      if (
+        side === 'BUY' &&
+        htfData.latestSMA7.isGreen &&
+        m7 <= livePrice * 1.005
+      ) {
+        const dist = Math.abs(livePrice - m7) / livePrice;
+        if (dist <= HTF_SR_PROXIMITY_TOL) {
+          matchedLevels.push({
+            label: `${htf}-MM7`,
+            timeframe: htf,
+            kind: 'MM7',
+            price: m7,
+            distancePct: dist * 100,
+          });
+        }
+      } else if (
+        side === 'SELL' &&
+        !htfData.latestSMA7.isGreen &&
+        m7 >= livePrice * 0.995
+      ) {
+        const dist = Math.abs(m7 - livePrice) / livePrice;
+        if (dist <= HTF_SR_PROXIMITY_TOL) {
+          matchedLevels.push({
+            label: `${htf}-MM7`,
+            timeframe: htf,
+            kind: 'MM7',
+            price: m7,
+            distancePct: dist * 100,
+          });
+        }
+      }
+    }
+
+    // 3. MM20 (SMA 20) — Green/rising for Support, Red/falling for Resistance
+    if (htfData.latestSMA20 && htfData.latestSMA20.value > 0) {
+      const m20 = htfData.latestSMA20.value;
+      if (
+        side === 'BUY' &&
+        htfData.latestSMA20.isGreen &&
+        m20 <= livePrice * 1.005
+      ) {
+        const dist = Math.abs(livePrice - m20) / livePrice;
+        if (dist <= HTF_SR_PROXIMITY_TOL) {
+          matchedLevels.push({
+            label: `${htf}-MM20`,
+            timeframe: htf,
+            kind: 'MM20',
+            price: m20,
+            distancePct: dist * 100,
+          });
+        }
+      } else if (
+        side === 'SELL' &&
+        !htfData.latestSMA20.isGreen &&
+        m20 >= livePrice * 0.995
+      ) {
+        const dist = Math.abs(m20 - livePrice) / livePrice;
+        if (dist <= HTF_SR_PROXIMITY_TOL) {
+          matchedLevels.push({
+            label: `${htf}-MM20`,
+            timeframe: htf,
+            kind: 'MM20',
+            price: m20,
+            distancePct: dist * 100,
+          });
+        }
+      }
+    }
+
+    // 4. Wilder SAR AT.S — Bullish (below price) for Support, Bearish (above price) for Resistance
+    if (htfData.latestSAR && htfData.latestSAR.value > 0) {
+      const sar = htfData.latestSAR.value;
+      if (
+        side === 'BUY' &&
+        htfData.latestSAR.isBullish &&
+        sar <= livePrice * 1.005
+      ) {
+        const dist = Math.abs(livePrice - sar) / livePrice;
+        if (dist <= HTF_SR_PROXIMITY_TOL) {
+          matchedLevels.push({
+            label: `${htf}-SAR`,
+            timeframe: htf,
+            kind: 'SAR',
+            price: sar,
+            distancePct: dist * 100,
+          });
+        }
+      } else if (
+        side === 'SELL' &&
+        !htfData.latestSAR.isBullish &&
+        sar >= livePrice * 0.995
+      ) {
+        const dist = Math.abs(sar - livePrice) / livePrice;
+        if (dist <= HTF_SR_PROXIMITY_TOL) {
+          matchedLevels.push({
+            label: `${htf}-SAR`,
+            timeframe: htf,
+            kind: 'SAR',
+            price: sar,
+            distancePct: dist * 100,
+          });
+        }
+      }
+    }
+  }
+
+  // Sort matched levels by highest timeframe first, then closest to livePrice
+  matchedLevels.sort((a, b) => {
+    const tfDiff = TIMEFRAME_RANK[b.timeframe] - TIMEFRAME_RANK[a.timeframe];
+    if (tfDiff !== 0) return tfDiff;
+    return a.distancePct - b.distancePct;
+  });
+
+  return { matchedLevels, matchedBaselines };
+}
+
+/**
+ * Simplified Multi-Timeframe BB-Exit + Higher-Timeframe Support/Resistance Screener:
  *
- * Evaluates an asset chronologically through:
- * - State A: "INVALIDATED" (Knockout Rule — livePrice breached established Didi by >1%)
- * - State B: "NO SETUP" (Volatility Gatekeeper — Check 1 Phase 2 diverging, Check 2 Outer Band push/exit, Check 3 <=1% HTF Cluster)
- * - State C: "STEP 1: THE WALL" (Aggressive — on cluster, Didi intact, opposite Daily BB still widening)
- * - State D: "STEP 2: REVERSAL CONFIRMED" (Conservative — on cluster, Didi intact, opposite Daily BB hooked inward)
+ * 1. Scans trigger timeframes from HIGHEST to LOWEST (`6M -> 3M -> M -> W -> D`).
+ * 2. Checks if price is exiting the Bollinger Band by the BOTTOM (Buy) or by the TOP (Sell).
+ * 3. Checks if combined with a Support (Bottom exit) or Resistance (Top exit) on a STRICTLY HIGHER
+ *    timeframe (`htf > triggerTf`) using: SAR, MM7, MM20, Jack, or Oggy.
+ * 4. Ranks higher-timeframe setups strictly above lower-timeframe setups
+ *    (e.g. 3M BB exit + 6M/12M resistance >> D BB exit + W resistance).
  */
 export function detectAtsSetup(assetData: {
   livePrice: number;
@@ -188,388 +389,152 @@ export function detectAtsSetup(assetData: {
 }): AtsStateDetectionResult {
   const { livePrice, timeframes } = assetData;
 
-  // 1. Gather strictly UNBROKEN Higher-Timeframe (W, M, 3M, 6M, 12M) Jack & Oggy lines
-  //    plus all raw HTF reference prices (to detect State A knockouts when a cluster was just broken!)
-  const unbrokenBuyCluster: ATSBaseline[] = [];
-  const unbrokenSellCluster: ATSBaseline[] = [];
-  const allHtfPrices: number[] = [];
+  let bestMatch: {
+    triggerTf: Timeframe;
+    side: 'BUY' | 'SELL';
+    highestHtf: Timeframe;
+    rank: number;
+    matchedLevels: MatchedHTFLevel[];
+    matchedBaselines: ATSBaseline[];
+    didiPrice: number;
+    riskToDidiPct: number;
+    phase3HookedInward: boolean;
+    phase2Diverging: boolean;
+  } | null = null;
 
-  for (const tf of HIGHER_TIMEFRAMES) {
-    const tfData = timeframes[tf];
-    const allTfLines = flattenTimeframeBaselines(
-      tfData.Jack,
-      tfData.Oggy,
-      false
-    );
-    for (const line of allTfLines) {
-      allHtfPrices.push(line.price);
-      if (line.isPierced) continue;
+  for (const triggerTf of TRIGGER_TIMEFRAMES_DESC) {
+    const tfData = timeframes[triggerTf];
+    const bars = tfData.bars;
+    const bbArr = tfData.bollingerBands;
+    if (bars.length < 2 || bbArr.length < 2) continue;
 
-      // Critical Rule: Green support MUST NOT be above livePrice; Red resistance MUST NOT be below livePrice
-      if (line.polarity === 'GREEN' && line.price <= livePrice) {
-        if (Math.abs(livePrice - line.price) / livePrice <= 0.01) {
-          unbrokenBuyCluster.push(line);
-        }
-      } else if (line.polarity === 'RED' && line.price >= livePrice) {
-        if (Math.abs(line.price - livePrice) / livePrice <= 0.01) {
-          unbrokenSellCluster.push(line);
-        }
+    const curBar = bars[bars.length - 1];
+    const currBB = bbArr[bbArr.length - 1];
+    const prevBB = bbArr[bbArr.length - 2];
+    if (currBB.upper <= currBB.lower) continue;
+
+    // Check if price gets out of the Bollinger Band by the BOTTOM or by the TOP on `triggerTf`
+    const exitedBottom =
+      livePrice < currBB.lower ||
+      (curBar.low < currBB.lower && livePrice <= currBB.lower * 1.015);
+    const exitedTop =
+      livePrice > currBB.upper ||
+      (curBar.high > currBB.upper && livePrice >= currBB.upper * 0.985);
+
+    if (!exitedBottom && !exitedTop) continue;
+
+    const sidesToCheck: Array<'BUY' | 'SELL'> = [];
+    if (exitedBottom) sidesToCheck.push('BUY');
+    if (exitedTop) sidesToCheck.push('SELL');
+
+    for (const side of sidesToCheck) {
+      const refExtremePrice =
+        side === 'BUY'
+          ? Math.min(curBar.low, livePrice)
+          : Math.max(curBar.high, livePrice);
+
+      const { matchedLevels, matchedBaselines } = findHigherTimeframeSR({
+        triggerTf,
+        side,
+        livePrice,
+        refExtremePrice,
+        timeframes,
+      });
+
+      if (matchedLevels.length === 0) continue;
+
+      const highestHtf = matchedLevels[0].timeframe;
+      const triggerRank = TIMEFRAME_RANK[triggerTf];
+      const htfRank = TIMEFRAME_RANK[highestHtf];
+      // Higher trigger timeframe & higher S/R timeframe ALWAYS outrank lower timeframes
+      const rank =
+        triggerRank * 100 + htfRank * 15 + Math.min(14, matchedLevels.length);
+
+      const phase3HookedInward =
+        side === 'BUY'
+          ? currBB.upper < prevBB.upper
+          : currBB.lower > prevBB.lower;
+      const phase2Diverging =
+        currBB.upper > prevBB.upper && currBB.lower < prevBB.lower;
+
+      const didiPrice = refExtremePrice;
+      const riskToDidiPct =
+        didiPrice > 0 && livePrice > 0
+          ? side === 'BUY'
+            ? Math.max(0, ((livePrice - didiPrice) / didiPrice) * 100)
+            : Math.max(0, ((didiPrice - livePrice) / livePrice) * 100)
+          : 0;
+
+      if (!bestMatch || rank > bestMatch.rank) {
+        bestMatch = {
+          triggerTf,
+          side,
+          highestHtf,
+          rank,
+          matchedLevels,
+          matchedBaselines,
+          didiPrice,
+          riskToDidiPct,
+          phase3HookedInward,
+          phase2Diverging,
+        };
       }
     }
   }
 
-  const sortCluster = (lines: ATSBaseline[]) =>
-    [...lines].sort((a, b) => {
-      const tfDiff =
-        TIMEFRAME_ORDER_WEIGHT[b.timeframe] -
-        TIMEFRAME_ORDER_WEIGHT[a.timeframe];
-      if (tfDiff !== 0) return tfDiff;
-      return Math.abs(livePrice - a.price) - Math.abs(livePrice - b.price);
-    });
+  if (!bestMatch) {
+    const dBars = timeframes.D.bars;
+    const latestD = dBars.length > 0 ? dBars[dBars.length - 1] : null;
+    const fallbackDidi = latestD ? latestD.low : livePrice;
+    const fallbackRisk =
+      fallbackDidi > 0
+        ? Math.max(0, ((livePrice - fallbackDidi) / fallbackDidi) * 100)
+        : 0;
 
-  const sortedBuyCluster = sortCluster(unbrokenBuyCluster);
-  const sortedSellCluster = sortCluster(unbrokenSellCluster);
-
-  // Select consistent Daily bars & Bollinger Bands (falling back cleanly in synthetic single-TF tests)
-  const dBars = timeframes.D.bars;
-  const dailyConsistent =
-    dBars.length >= 2 &&
-    Math.abs(dBars[dBars.length - 1].close - livePrice) <=
-      Math.max(0.01, livePrice * 0.03);
-
-  const fallbackTf: Timeframe =
-    sortedBuyCluster[0]?.timeframe ??
-    sortedSellCluster[0]?.timeframe ??
-    'M';
-
-  const evalBars: OHLCVBar[] = dailyConsistent
-    ? dBars
-    : timeframes[fallbackTf].bars;
-  const evalBB: BollingerBandPoint[] = dailyConsistent
-    ? timeframes.D.bollingerBands
-    : timeframes[fallbackTf].bollingerBands;
-
-  const currBB = evalBB.length >= 1 ? evalBB[evalBB.length - 1] : null;
-  const prevBB = evalBB.length >= 2 ? evalBB[evalBB.length - 2] : null;
-  const bbOffset = evalBars.length - evalBB.length;
-
-  const getBBAtBarIndex = (barIdx: number): BollingerBandPoint | null => {
-    const idx = barIdx - bbOffset;
-    return idx >= 0 && idx < evalBB.length ? evalBB[idx] : currBB;
-  };
-
-  // =========================================================================
-  // STATE A: "INVALIDATED" (The Knockout Rule — 1% Buffer beyond Didi)
-  // =========================================================================
-  const recentLen = Math.min(10, evalBars.length);
-  const recentStartIdx = Math.max(0, evalBars.length - recentLen);
-  const windowBars = evalBars.slice(recentStartIdx);
-
-  // Determine whether recent market leg is dropping (lower half of BB) or rallying (upper half of BB)
-  const isLowerHalf = currBB ? livePrice <= currBB.mid : true;
-
-  // Trace current drop from highest high in window
-  let peakOffset = 0;
-  for (let i = 1; i < windowBars.length; i++) {
-    if (windowBars[i].high > windowBars[peakOffset].high) {
-      peakOffset = i;
-    }
-  }
-  const dropBars = windowBars.slice(peakOffset);
-
-  // Trace current rally from lowest low in window
-  let troughOffset = 0;
-  for (let i = 1; i < windowBars.length; i++) {
-    if (windowBars[i].low < windowBars[troughOffset].low) {
-      troughOffset = i;
-    }
-  }
-  const rallyBars = windowBars.slice(troughOffset);
-
-  // Check if a Buy setup's established Phase 2 Didi low was breached by >1% (livePrice < Didi * 0.99)
-  if (isLowerHalf && dropBars.length >= 2) {
-    let establishedBuyDidi: number | null = null;
-    for (let m = 0; m < dropBars.length - 1; m++) {
-      const globalBarIdx = recentStartIdx + peakOffset + m;
-      const bbAtM = getBBAtBarIndex(globalBarIdx);
-      const candidateLow = dropBars[m].low;
-
-      const pushedLowerBand = bbAtM
-        ? candidateLow <= bbAtM.lower + 0.35 * bbAtM.stdDev
-        : true;
-      const nearAnyHtfWall = allHtfPrices.some(
-        (p) => p > 0 && Math.abs(candidateLow - p) / p <= 0.015
-      );
-
-      if (pushedLowerBand && nearAnyHtfWall) {
-        let bouncedAfter = false;
-        for (let k = m + 1; k < dropBars.length - 1; k++) {
-          if (
-            dropBars[k].low > candidateLow &&
-            dropBars[k].close > candidateLow * 1.003
-          ) {
-            bouncedAfter = true;
-            break;
-          }
-        }
-        if (
-          bouncedAfter &&
-          (establishedBuyDidi === null || candidateLow < establishedBuyDidi)
-        ) {
-          establishedBuyDidi = candidateLow;
-        }
-      }
-    }
-
-    if (
-      establishedBuyDidi !== null &&
-      livePrice < establishedBuyDidi * (1 - DIDI_KNOCKOUT_BUFFER)
-    ) {
-      const riskPct =
-        (Math.abs(livePrice - establishedBuyDidi) / establishedBuyDidi) * 100;
-      return {
-        state: 'INVALIDATED',
-        setupSide: 'BUY',
-        ClusterDensityCount: sortedBuyCluster.length,
-        RiskToDidiPercentage: riskPct,
-        RiskToDidi: riskPct,
-        didiPrice: establishedBuyDidi,
-        clusterLines: sortedBuyCluster,
-        gatekeeperChecks: {
-          didNotKnockout: false,
-          check1Phase2Diverging: false,
-          check2OuterBandPush: false,
-          check3OnHtfCluster: sortedBuyCluster.length > 0,
-          check4Phase3HookedInward: false,
-        },
-      };
-    }
-  }
-
-  // Symmetric: Check if a Sell setup's established Phase 2 Didi high was breached by >1% (livePrice > Didi * 1.01)
-  if (!isLowerHalf && rallyBars.length >= 2) {
-    let establishedSellDidi: number | null = null;
-    for (let m = 0; m < rallyBars.length - 1; m++) {
-      const globalBarIdx = recentStartIdx + troughOffset + m;
-      const bbAtM = getBBAtBarIndex(globalBarIdx);
-      const candidateHigh = rallyBars[m].high;
-
-      const pushedUpperBand = bbAtM
-        ? candidateHigh >= bbAtM.upper - 0.35 * bbAtM.stdDev
-        : true;
-      const nearAnyHtfWall = allHtfPrices.some(
-        (p) => p > 0 && Math.abs(candidateHigh - p) / p <= 0.015
-      );
-
-      if (pushedUpperBand && nearAnyHtfWall) {
-        let pulledBackAfter = false;
-        for (let k = m + 1; k < rallyBars.length - 1; k++) {
-          if (
-            rallyBars[k].high < candidateHigh &&
-            rallyBars[k].close < candidateHigh * 0.997
-          ) {
-            pulledBackAfter = true;
-            break;
-          }
-        }
-        if (
-          pulledBackAfter &&
-          (establishedSellDidi === null || candidateHigh > establishedSellDidi)
-        ) {
-          establishedSellDidi = candidateHigh;
-        }
-      }
-    }
-
-    if (
-      establishedSellDidi !== null &&
-      livePrice > establishedSellDidi * (1 + DIDI_KNOCKOUT_BUFFER)
-    ) {
-      const riskPct =
-        (Math.abs(livePrice - establishedSellDidi) / establishedSellDidi) * 100;
-      return {
-        state: 'INVALIDATED',
-        setupSide: 'SELL',
-        ClusterDensityCount: sortedSellCluster.length,
-        RiskToDidiPercentage: riskPct,
-        RiskToDidi: riskPct,
-        didiPrice: establishedSellDidi,
-        clusterLines: sortedSellCluster,
-        gatekeeperChecks: {
-          didNotKnockout: false,
-          check1Phase2Diverging: false,
-          check2OuterBandPush: false,
-          check3OnHtfCluster: sortedSellCluster.length > 0,
-          check4Phase3HookedInward: false,
-        },
-      };
-    }
-  }
-
-  // =========================================================================
-  // DETERMINE CANDIDATE DIRECTION & DIDI EXTREME (Didi is intact)
-  // =========================================================================
-  let setupSide: 'BUY' | 'SELL' | 'NONE' = 'NONE';
-  if (sortedBuyCluster.length > 0 && sortedSellCluster.length === 0) {
-    setupSide = 'BUY';
-  } else if (sortedSellCluster.length > 0 && sortedBuyCluster.length === 0) {
-    setupSide = 'SELL';
-  } else if (sortedBuyCluster.length > 0 && sortedSellCluster.length > 0) {
-    if (currBB) {
-      setupSide = livePrice <= currBB.mid ? 'BUY' : 'SELL';
-    } else {
-      setupSide =
-        sortedBuyCluster.length >= sortedSellCluster.length ? 'BUY' : 'SELL';
-    }
-  }
-
-  const activeCluster =
-    setupSide === 'BUY'
-      ? sortedBuyCluster
-      : setupSide === 'SELL'
-      ? sortedSellCluster
-      : [];
-  const ClusterDensityCount = activeCluster.length;
-
-  const isBuy = setupSide === 'BUY' || (setupSide === 'NONE' && isLowerHalf);
-  const didiPrice = isBuy
-    ? Math.min(
-        ...(dropBars.length > 0 ? dropBars.map((b) => b.low) : [livePrice]),
-        livePrice
-      )
-    : Math.max(
-        ...(rallyBars.length > 0 ? rallyBars.map((b) => b.high) : [livePrice]),
-        livePrice
-      );
-
-  const RiskToDidiPercentage =
-    didiPrice > 0 && livePrice > 0
-      ? isBuy
-        ? ((livePrice - didiPrice) / didiPrice) * 100
-        : ((didiPrice - livePrice) / livePrice) * 100
-      : 0;
-
-  // =========================================================================
-  // STATE B: "NO SETUP" (The Volatility Gatekeeper — Checks 1, 2, and 3)
-  // =========================================================================
-  const check3OnHtfCluster = ClusterDensityCount >= 1;
-
-  // Check 4 preview: has the opposite Daily Bollinger Band hooked inward toward price (Phase 3)?
-  const check4Phase3HookedInward = Boolean(
-    currBB &&
-      prevBB &&
-      setupSide !== 'NONE' &&
-      (setupSide === 'BUY'
-        ? currBB.upper < prevBB.upper
-        : currBB.lower > prevBB.lower)
-  );
-
-  // Check 1: Are Daily Bollinger Bands actively diverging (Phase 2) right now,
-  // OR (when Phase 3 just hooked inward) were they actively diverging in the preceding 1..4 bars?
-  const currentlyDiverging = Boolean(
-    currBB &&
-      prevBB &&
-      currBB.upper > prevBB.upper &&
-      currBB.lower < prevBB.lower
-  );
-
-  let recentlyDivergedBeforeHook = false;
-  if (check4Phase3HookedInward && evalBB.length >= 3) {
-    const maxLb = Math.min(4, evalBB.length - 2);
-    for (let lb = 1; lb <= maxLb; lb++) {
-      const c = evalBB[evalBB.length - 1 - lb];
-      const p = evalBB[evalBB.length - 2 - lb];
-      if (c && p && c.upper > p.upper && c.lower < p.lower) {
-        recentlyDivergedBeforeHook = true;
-        break;
-      }
-    }
-  }
-
-  const check1Phase2Diverging =
-    currentlyDiverging ||
-    (check4Phase3HookedInward && recentlyDivergedBeforeHook);
-
-  // Check 2: Is livePrice (or the immediate Phase 2 test bar) pushing against or exiting the outer band?
-  const latestEvalBar =
-    evalBars.length > 0 ? evalBars[evalBars.length - 1] : null;
-  let check2OuterBandPush = false;
-  if (currBB && latestEvalBar && setupSide !== 'NONE') {
-    if (setupSide === 'BUY') {
-      const livePush =
-        Math.min(livePrice, latestEvalBar.low) <=
-        currBB.lower + 0.35 * currBB.stdDev;
-      let recentPush = false;
-      if (check4Phase3HookedInward && livePrice <= currBB.mid) {
-        for (let lb = 1; lb <= Math.min(3, evalBars.length - 1); lb++) {
-          const bIdx = evalBars.length - 1 - lb;
-          const bbK = getBBAtBarIndex(bIdx);
-          if (bbK && evalBars[bIdx].low <= bbK.lower + 0.3 * bbK.stdDev) {
-            recentPush = true;
-            break;
-          }
-        }
-      }
-      check2OuterBandPush = livePush || recentPush;
-    } else {
-      const livePush =
-        Math.max(livePrice, latestEvalBar.high) >=
-        currBB.upper - 0.35 * currBB.stdDev;
-      let recentPush = false;
-      if (check4Phase3HookedInward && livePrice >= currBB.mid) {
-        for (let lb = 1; lb <= Math.min(3, evalBars.length - 1); lb++) {
-          const bIdx = evalBars.length - 1 - lb;
-          const bbK = getBBAtBarIndex(bIdx);
-          if (bbK && evalBars[bIdx].high >= bbK.upper - 0.3 * bbK.stdDev) {
-            recentPush = true;
-            break;
-          }
-        }
-      }
-      check2OuterBandPush = livePush || recentPush;
-    }
-  }
-
-  if (!check1Phase2Diverging || !check2OuterBandPush || !check3OnHtfCluster) {
     return {
       state: 'NO SETUP',
-      setupSide,
-      ClusterDensityCount,
-      RiskToDidiPercentage: Math.max(0, RiskToDidiPercentage),
-      RiskToDidi: Math.max(0, RiskToDidiPercentage),
-      didiPrice,
-      clusterLines: activeCluster,
+      setupSide: 'NONE',
+      bbExitTimeframe: null,
+      highestHtfTimeframe: null,
+      setupHierarchyRank: 0,
+      matchedHtfLevels: [],
+      ClusterDensityCount: 0,
+      RiskToDidiPercentage: fallbackRisk,
+      RiskToDidi: fallbackRisk,
+      didiPrice: fallbackDidi,
+      clusterLines: [],
       gatekeeperChecks: {
         didNotKnockout: true,
-        check1Phase2Diverging,
-        check2OuterBandPush,
-        check3OnHtfCluster,
-        check4Phase3HookedInward,
+        check1Phase2Diverging: false,
+        check2OuterBandPush: false,
+        check3OnHtfCluster: false,
+        check4Phase3HookedInward: false,
       },
     };
   }
 
-  // =========================================================================
-  // STATE C vs STATE D (Check 4 — Phase 3 Trajectory Hook Check)
-  // =========================================================================
-  const finalState: AtsState = check4Phase3HookedInward
+  const state: AtsState = bestMatch.phase3HookedInward
     ? 'STEP 2: REVERSAL CONFIRMED'
     : 'STEP 1: THE WALL';
 
   return {
-    state: finalState,
-    setupSide,
-    ClusterDensityCount,
-    RiskToDidiPercentage: Math.max(0, RiskToDidiPercentage),
-    RiskToDidi: Math.max(0, RiskToDidiPercentage),
-    didiPrice,
-    clusterLines: activeCluster,
+    state,
+    setupSide: bestMatch.side,
+    bbExitTimeframe: bestMatch.triggerTf,
+    highestHtfTimeframe: bestMatch.highestHtf,
+    setupHierarchyRank: bestMatch.rank,
+    matchedHtfLevels: bestMatch.matchedLevels,
+    ClusterDensityCount: bestMatch.matchedLevels.length,
+    RiskToDidiPercentage: bestMatch.riskToDidiPct,
+    RiskToDidi: bestMatch.riskToDidiPct,
+    didiPrice: bestMatch.didiPrice,
+    clusterLines: bestMatch.matchedBaselines,
     gatekeeperChecks: {
       didNotKnockout: true,
-      check1Phase2Diverging,
-      check2OuterBandPush,
-      check3OnHtfCluster,
-      check4Phase3HookedInward,
+      check1Phase2Diverging: bestMatch.phase2Diverging,
+      check2OuterBandPush: true,
+      check3OnHtfCluster: true,
+      check4Phase3HookedInward: bestMatch.phase3HookedInward,
     },
   };
 }
@@ -658,36 +623,19 @@ export function evaluateATSScreener(params: {
   const isAtResistanceWall = isActiveSetup && direction === 'SHORT';
   const isAtWall = isAtSupportWall || isAtResistanceWall;
 
-  const primaryLine =
-    detection.clusterLines.length > 0 ? detection.clusterLines[0] : null;
-  const nearestAnyLine = (() => {
-    if (nearestGreenSupport && nearestRedResistance) {
-      const dSup = Math.abs(livePrice - nearestGreenSupport.price);
-      const dRes = Math.abs(nearestRedResistance.price - livePrice);
-      return dSup <= dRes ? nearestGreenSupport : nearestRedResistance;
-    }
-    return nearestGreenSupport ?? nearestRedResistance;
-  })();
-
-  const activeWallLabel = primaryLine
-    ? detection.clusterLines.length > 1
-      ? `${primaryLine.label} (+${detection.clusterLines.length - 1})`
-      : primaryLine.label
-    : nearestAnyLine
-    ? `${nearestAnyLine.label} (${(
-        (Math.abs(livePrice - nearestAnyLine.price) / livePrice) *
-        100
-      ).toFixed(1)}%)`
-    : 'No Unbroken Wall';
-
-  const wallPrice = primaryLine
-    ? primaryLine.price
-    : nearestAnyLine?.price ?? null;
-
-  const wallProximityPct =
-    wallPrice !== null
-      ? (Math.abs(livePrice - wallPrice) / livePrice) * 100
+  const primaryMatched =
+    detection.matchedHtfLevels.length > 0
+      ? detection.matchedHtfLevels[0]
       : null;
+
+  const activeWallLabel = primaryMatched
+    ? detection.matchedHtfLevels.length > 1
+      ? `${primaryMatched.label} (+${detection.matchedHtfLevels.length - 1})`
+      : primaryMatched.label
+    : 'No BB Exit + HTF S/R';
+
+  const wallPrice = primaryMatched ? primaryMatched.price : null;
+  const wallProximityPct = primaryMatched ? primaryMatched.distancePct : null;
 
   const isShortBias = direction === 'SHORT';
   const stopLoss = detection.didiPrice;
@@ -703,14 +651,14 @@ export function evaluateATSScreener(params: {
     if (!isShortBias && signedPct > 0.6) {
       m20Candidates.push({
         price: m20,
-        label: `${tf}-M20`,
+        label: `${tf}-MM20`,
         timeframe: tf,
         upsidePct: signedPct,
       });
     } else if (isShortBias && signedPct < -0.6) {
       m20Candidates.push({
         price: m20,
-        label: `${tf}-M20`,
+        label: `${tf}-MM20`,
         timeframe: tf,
         upsidePct: signedPct,
       });
@@ -737,105 +685,48 @@ export function evaluateATSScreener(params: {
     liveReward > 0 && riskAmount > 0 ? liveReward / riskAmount : null;
 
   const volatilitySignal =
-    detection.state === 'STEP 2: REVERSAL CONFIRMED'
-      ? 'Phase 3 (Opposite Daily BB hooked inward)'
-      : detection.state === 'STEP 1: THE WALL'
-      ? 'Phase 2 (Daily BBs diverging — Peak Volatility)'
-      : detection.gatekeeperChecks.check1Phase2Diverging
-      ? 'Phase 2 Diverging'
-      : 'Phase 1 / Non-Diverging';
+    isActiveSetup && detection.bbExitTimeframe
+      ? detection.state === 'STEP 2: REVERSAL CONFIRMED'
+        ? `${detection.bbExitTimeframe} BB Exit → Phase 3 Reversal`
+        : `${detection.bbExitTimeframe} BB Exit → On ${detection.highestHtfTimeframe} Wall`
+      : 'Inside Bollinger Bands / No HTF Match';
 
-  // Chronological State Explanation
   let thesisHeadline = '';
   const reasoningBullets: string[] = [];
-  const g = detection.gatekeeperChecks;
 
-  if (detection.state === 'INVALIDATED') {
-    thesisHeadline = `INVALIDATED — Live price (${fmtNum(
-      livePrice,
-      category
-    )}) breached established Didi (${fmtNum(
-      detection.didiPrice,
-      category
-    )}) by ${detection.RiskToDidiPercentage.toFixed(2)}% (>1% buffer).`;
-    reasoningBullets.push(
-      `State A (Knockout Rule): Didi (${fmtNum(
-        detection.didiPrice,
-        category
-      )}) was breached by ${detection.RiskToDidiPercentage.toFixed(
-        2
-      )}% (>1% buffer) — stop-loss broken.`
-    );
-  } else if (detection.state === 'STEP 2: REVERSAL CONFIRMED') {
-    const lineList = detection.clusterLines
+  if (isActiveSetup && detection.bbExitTimeframe && detection.highestHtfTimeframe) {
+    const exitSideDesc =
+      detection.setupSide === 'BUY' ? 'Bottom BB Exit' : 'Top BB Exit';
+    const srTypeDesc =
+      detection.setupSide === 'BUY' ? 'Support' : 'Resistance';
+    const levelList = detection.matchedHtfLevels
       .slice(0, 4)
       .map((l) => `${l.label} (${fmtNum(l.price, category)})`)
       .join(' + ');
-    thesisHeadline = `${detection.setupSide} • STEP 2: REVERSAL CONFIRMED (Conservative) — ${detection.ClusterDensityCount}-line wall [${lineList}] • Opposite Daily BB hooked inward.`;
+
+    thesisHeadline = `${detection.setupSide} • ${detection.bbExitTimeframe} ${exitSideDesc} + ${detection.highestHtfTimeframe} ${srTypeDesc} [${levelList}]`;
+
     reasoningBullets.push(
-      `Cluster Density (${detection.ClusterDensityCount} unbroken HTF line${
-        detection.ClusterDensityCount > 1 ? 's' : ''
-      } within 1%): ${lineList}.`
+      `Bollinger Band Exit: Price exited the ${
+        detection.setupSide === 'BUY' ? 'Lower' : 'Upper'
+      } Bollinger Band on the ${detection.bbExitTimeframe} timeframe.`
     );
     reasoningBullets.push(
-      `Didi Intact: ${fmtNum(
+      `Higher-Timeframe ${srTypeDesc} (${detection.ClusterDensityCount} matched level${
+        detection.ClusterDensityCount > 1 ? 's' : ''
+      } > ${detection.bbExitTimeframe}): ${levelList}.`
+    );
+    reasoningBullets.push(
+      `Didi Stop-Loss: ${fmtNum(
         detection.didiPrice,
         category
       )} (${detection.RiskToDidiPercentage.toFixed(2)}% Risk to Didi).`
-    );
-    reasoningBullets.push(
-      'Check 4 (Phase 3 Confirmed): Opposite Daily Bollinger Band has hooked inward toward price.'
-    );
-  } else if (detection.state === 'STEP 1: THE WALL') {
-    const lineList = detection.clusterLines
-      .slice(0, 4)
-      .map((l) => `${l.label} (${fmtNum(l.price, category)})`)
-      .join(' + ');
-    thesisHeadline = `${detection.setupSide} • STEP 1: THE WALL (Aggressive) — ${detection.ClusterDensityCount}-line wall [${lineList}] • Pushing outer Daily BB in Phase 2.`;
-    reasoningBullets.push(
-      `Cluster Density (${detection.ClusterDensityCount} unbroken HTF line${
-        detection.ClusterDensityCount > 1 ? 's' : ''
-      } within 1%): ${lineList}.`
-    );
-    reasoningBullets.push(
-      `Didi Intact: ${fmtNum(
-        detection.didiPrice,
-        category
-      )} (${detection.RiskToDidiPercentage.toFixed(2)}% Risk to Didi).`
-    );
-    reasoningBullets.push(
-      'Check 4 (Phase 2 Active): Opposite Daily Bollinger Band is still widening — aggressive sniper entry on the wall.'
     );
   } else {
-    const failedReasons: string[] = [];
-    if (!g.check3OnHtfCluster) {
-      failedReasons.push('Not within 1% of an unbroken HTF Jack/Oggy cluster');
-    }
-    if (!g.check1Phase2Diverging) {
-      failedReasons.push('Daily Bollinger Bands not diverging (Phase 2)');
-    }
-    if (!g.check2OuterBandPush) {
-      failedReasons.push('Price not pushing/exiting outer Daily Bollinger Band');
-    }
-    thesisHeadline = `NO SETUP — ${failedReasons.join(' · ')}`;
+    thesisHeadline =
+      'NO SETUP — Price is not exiting a Bollinger Band onto a Higher-Timeframe Support/Resistance (SAR, MM7, MM20, Jack, Oggy).';
     reasoningBullets.push(
-      `Check 1 (Daily BB Phase 2 Diverging): ${
-        g.check1Phase2Diverging ? 'YES ✓' : 'NO ✗'
-      }`
-    );
-    reasoningBullets.push(
-      `Check 2 (Pushing/Exiting Outer Daily BB): ${
-        g.check2OuterBandPush ? 'YES ✓' : 'NO ✗'
-      }`
-    );
-    reasoningBullets.push(
-      `Check 3 (Within 1% of Unbroken HTF Cluster): ${
-        g.check3OnHtfCluster
-          ? `YES ✓ (${detection.ClusterDensityCount} line${
-              detection.ClusterDensityCount > 1 ? 's' : ''
-            })`
-          : 'NO ✗ (0 lines)'
-      }`
+      'Requires: (1) Price exiting Lower or Upper Bollinger Band on D, W, M, 3M, or 6M, combined with (2) an unbroken Support or Resistance (SAR, MM7, MM20, Jack, or Oggy) on a strictly higher timeframe.'
     );
   }
 
@@ -848,6 +739,10 @@ export function evaluateATSScreener(params: {
     change24hPct,
     atsState: detection.state,
     setupSide: detection.setupSide,
+    bbExitTimeframe: detection.bbExitTimeframe,
+    highestHtfTimeframe: detection.highestHtfTimeframe,
+    setupHierarchyRank: detection.setupHierarchyRank,
+    matchedHtfLevels: detection.matchedHtfLevels,
     direction,
     signalStatus,
     ClusterDensityCount: detection.ClusterDensityCount,

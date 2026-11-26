@@ -230,9 +230,27 @@ export interface TimeframeHorizonSummary {
   m20Price: number | null;
 }
 
+export type HTFLevelKind = 'SAR' | 'MM7' | 'MM20' | 'Jack' | 'Oggy';
+
+export interface MatchedHTFLevel {
+  label: string;
+  timeframe: Timeframe;
+  kind: HTFLevelKind;
+  price: number;
+  distancePct: number;
+}
+
 export interface AtsStateDetectionResult {
   state: AtsState;
   setupSide: 'BUY' | 'SELL' | 'NONE';
+  /** Trigger timeframe where price exits the Bollinger Band (6M > 3M > M > W > D) */
+  bbExitTimeframe: Timeframe | null;
+  /** Highest timeframe of the matched support/resistance (strictly > bbExitTimeframe) */
+  highestHtfTimeframe: Timeframe | null;
+  /** Deterministic hierarchy rank: higher trigger TF & higher S/R TF always rank first */
+  setupHierarchyRank: number;
+  /** All matched HTF levels (SAR, MM7, MM20, Jack, Oggy) on timeframes > bbExitTimeframe */
+  matchedHtfLevels: MatchedHTFLevel[];
   ClusterDensityCount: number;
   RiskToDidiPercentage: number;
   RiskToDidi: number;
@@ -257,6 +275,14 @@ export interface ScreenerResult {
   /** Resulting chronological ATS State */
   atsState: AtsState;
   setupSide: 'BUY' | 'SELL' | 'NONE';
+  /** Timeframe where price gets out of the Bollinger Band (higher = better) */
+  bbExitTimeframe: Timeframe | null;
+  /** Highest timeframe of the matched Support/Resistance (> bbExitTimeframe) */
+  highestHtfTimeframe: Timeframe | null;
+  /** Hierarchy rank: higher BB-exit TF + higher S/R TF always sorts at the top */
+  setupHierarchyRank: number;
+  /** Matched HTF Supports/Resistances (SAR, MM7, MM20, Jack, Oggy) */
+  matchedHtfLevels: MatchedHTFLevel[];
   direction: SetupDirection;
   signalStatus: SetupConfirmationStatus;
   /** Number of unbroken HTF Jack/Oggy lines sitting within 1% of livePrice */
