@@ -16,12 +16,12 @@ import type {
 } from '../types/ats.ts';
 
 const CHART_PROXIMITY_PCT_BY_TF: Record<Timeframe, number> = {
-  D: 3.5,
-  W: 5.0,
-  M: 6.5,
-  '3M': 8.0,
-  '6M': 8.0,
-  '12M': 8.0,
+  D: 4.5,
+  W: 6.5,
+  M: 10.0,
+  '3M': 12.0,
+  '6M': 14.0,
+  '12M': 16.0,
 };
 
 /**

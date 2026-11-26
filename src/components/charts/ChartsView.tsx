@@ -766,6 +766,15 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
                       syncBus={syncBus}
                       isHighlightedWallTimeframe={wallHighlight !== null}
                       wallHighlightType={wallHighlight}
+                      matchedBaselineLabels={(
+                        payload.screener.matchedHtfLevels || []
+                      )
+                        .filter(
+                          (m) =>
+                            m.timeframe === tf &&
+                            (m.kind === 'Jack' || m.kind === 'Oggy')
+                        )
+                        .map((m) => m.label)}
                       isExpanded={isFocused}
                       onExpand={() =>
                         setFocusedTf((prev) => (prev === tf ? null : tf))

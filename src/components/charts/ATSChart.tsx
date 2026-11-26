@@ -35,6 +35,8 @@ export interface ATSChartProps {
   syncBus?: CrosshairSyncBus;
   isHighlightedWallTimeframe?: boolean;
   wallHighlightType?: 'SUPPORT' | 'RESISTANCE' | null;
+  /** Screener-matched Jack/Oggy labels for this timeframe — always plotted if unbroken */
+  matchedBaselineLabels?: string[];
   onExpand?: () => void;
   isExpanded?: boolean;
 }
@@ -59,6 +61,7 @@ export const ATSChart: React.FC<ATSChartProps> = ({
   syncBus,
   isHighlightedWallTimeframe = false,
   wallHighlightType = null,
+  matchedBaselineLabels,
   onExpand,
   isExpanded = false,
 }) => {
@@ -220,6 +223,7 @@ export const ATSChart: React.FC<ATSChartProps> = ({
   }, [category]);
 
   // 2. Populate Black OHLC Bars, BB + M7/M20, SAR Wilder AT.S, and Unpierced Proximate Jack/Oggy
+  const matchedLabelsKey = (matchedBaselineLabels ?? []).join('|');
   useEffect(() => {
     const chart = chartRef.current;
     const barSeries = barSeriesRef.current;
@@ -330,8 +334,11 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       });
     }
 
-    // Active UNBROKEN proximate Jack (Green/Red) & Oggy (BLUE) horizontal rays (thin lineWidth: 1)
+    // Active UNBROKEN proximate (or screener-matched) Jack (Green/Red) & Oggy (BLUE) horizontal rays
     const activeBaselines: ATSBaseline[] = [];
+    const matchedLabelSet = new Set(
+      matchedLabelsKey ? matchedLabelsKey.split('|') : []
+    );
     const isBrokenByLivePrice = (line: ATSBaseline) =>
       line.isPierced ||
       (line.polarity === 'GREEN' && line.price > livePrice) ||
@@ -344,7 +351,11 @@ export const ATSChart: React.FC<ATSChartProps> = ({
         data.Jack.Jack_Plus1,
       ];
       for (const line of jackEntries) {
-        if (!line || !line.shouldPlotOnChart || isBrokenByLivePrice(line)) {
+        if (
+          !line ||
+          (!line.shouldPlotOnChart && !matchedLabelSet.has(line.label)) ||
+          isBrokenByLivePrice(line)
+        ) {
           continue;
         }
         activeBaselines.push(line);
@@ -370,7 +381,11 @@ export const ATSChart: React.FC<ATSChartProps> = ({
         data.Oggy.Oggy_Plus1,
       ];
       for (const line of oggyEntries) {
-        if (!line || !line.shouldPlotOnChart || isBrokenByLivePrice(line)) {
+        if (
+          !line ||
+          (!line.shouldPlotOnChart && !matchedLabelSet.has(line.label)) ||
+          isBrokenByLivePrice(line)
+        ) {
           continue;
         }
         activeBaselines.push(line);
@@ -416,6 +431,7 @@ export const ATSChart: React.FC<ATSChartProps> = ({
   }, [
     data,
     livePrice,
+    matchedLabelsKey,
     preferences.showBollinger,
     preferences.showSAR,
     preferences.showJack,
