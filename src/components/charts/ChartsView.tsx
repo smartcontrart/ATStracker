@@ -27,6 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { resolveExecutionModeResult } from '@/lib/atsScreener';
 import { cn, formatPrice } from '@/lib/utils';
 import { useATSStore } from '@/store/useATSStore';
 import {
@@ -352,79 +353,112 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
           </div>
         </div>
 
-        {/* Dedicated Confidence Score Gauge + 6-Horizon Polarity Summary */}
-        {payload && (
-          <div className="grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3.5 lg:grid-cols-12 lg:items-center">
-            <div className="flex items-center gap-3.5 lg:col-span-4 lg:border-r lg:border-slate-200 lg:pr-4">
-              <div
-                className={cn(
-                  'flex h-14 w-16 shrink-0 flex-col items-center justify-center rounded-xl border font-mono',
-                  payload.screener.confidenceScore >= 70
-                    ? payload.screener.direction === 'SHORT'
-                      ? 'border-rose-300 bg-rose-50 text-rose-800'
-                      : 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                    : payload.screener.confidenceScore >= 45
-                    ? 'border-amber-300 bg-amber-50 text-amber-800'
-                    : 'border-slate-300 bg-white text-slate-700'
-                )}
-              >
-                <span className="text-lg font-extrabold leading-none">
-                  {payload.screener.confidenceScore}%
-                </span>
-                <span className="mt-0.5 text-[9px] uppercase tracking-wider opacity-80">
-                  Score
-                </span>
-              </div>
+        {/* Dedicated Confidence Score Gauge + Mode A/B Toggle + 6-Horizon Polarity Summary */}
+        {payload && (() => {
+          const requirePhase3 = Boolean(uiPreferences.requirePhase3Confirmation);
+          const modeRes = resolveExecutionModeResult(
+            payload.screener,
+            requirePhase3
+          );
+          const isShort = payload.screener.direction === 'SHORT';
 
-              <div className="min-w-0 flex-1 space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-900">
-                    <Gauge className="h-3.5 w-3.5 text-emerald-600" />
-                    ATS Confidence Score
-                  </span>
-                  <Badge
-                    variant={
-                      payload.screener.setupStep >= 3
-                        ? 'support'
-                        : payload.screener.setupStep >= 1
-                        ? 'amber'
-                        : 'outline'
-                    }
-                    className="font-mono text-[10px] py-0 px-1.5"
-                  >
-                    {payload.screener.setupStep > 0
-                      ? `STEP ${payload.screener.setupStep}/4`
-                      : 'WATCH'}
-                  </Badge>
-                </div>
-
-                <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
-                  <div
-                    className={cn(
-                      'h-full rounded-full transition-all',
-                      payload.screener.confidenceScore >= 70
-                        ? payload.screener.direction === 'SHORT'
-                          ? 'bg-rose-600'
-                          : 'bg-emerald-600'
-                        : payload.screener.confidenceScore >= 45
-                        ? 'bg-amber-500'
-                        : 'bg-slate-500'
-                    )}
-                    style={{ width: `${payload.screener.confidenceScore}%` }}
-                  />
-                </div>
-
-                <p
-                  className="truncate text-[11px] text-slate-600"
-                  title={payload.screener.thesisHeadline}
+          return (
+            <div className="grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3.5 lg:grid-cols-12 lg:items-center">
+              <div className="flex items-center gap-3.5 lg:col-span-5 lg:border-r lg:border-slate-200 lg:pr-4">
+                <div
+                  className={cn(
+                    'flex h-14 w-16 shrink-0 flex-col items-center justify-center rounded-xl border font-mono',
+                    modeRes.finalScore >= 70
+                      ? isShort
+                        ? 'border-rose-300 bg-rose-50 text-rose-800'
+                        : 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                      : modeRes.finalScore >= 40
+                      ? 'border-amber-300 bg-amber-50 text-amber-800'
+                      : 'border-slate-300 bg-white text-slate-600'
+                  )}
                 >
-                  {payload.screener.thesisHeadline}
-                </p>
-              </div>
-            </div>
+                  <span className="text-lg font-extrabold leading-none">
+                    {modeRes.finalScore}%
+                  </span>
+                  <span className="mt-0.5 text-[9px] uppercase tracking-wider opacity-80">
+                    {requirePhase3 ? 'Mode B' : 'Mode A'}
+                  </span>
+                </div>
 
-            {/* 6-Timeframe Polarity Strip */}
-            <div className="lg:col-span-8 space-y-1.5">
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <div className="flex flex-wrap items-center justify-between gap-1.5">
+                    <Badge
+                      variant={
+                        modeRes.finalScore >= 70
+                          ? isShort
+                            ? 'resistance'
+                            : 'support'
+                          : modeRes.finalScore >= 40
+                          ? 'amber'
+                          : 'outline'
+                      }
+                      className="font-mono text-[10px] py-0 px-2 font-bold"
+                    >
+                      {modeRes.tradeAction}
+                    </Badge>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        toggleUIPreference('requirePhase3Confirmation')
+                      }
+                      title="Toggle between Mode A (Aggressive — Toggle OFF) and Mode B (Conservative — Require Phase 3 or -25 pts)"
+                      className={cn(
+                        'rounded-md border px-2 py-0.5 font-mono text-[10px] font-semibold transition-colors',
+                        requirePhase3
+                          ? 'border-sky-400 bg-sky-50 text-sky-900'
+                          : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                      )}
+                    >
+                      {requirePhase3
+                        ? 'Phase 3 Req: ON (Mode B)'
+                        : 'Phase 3 Req: OFF (Mode A)'}
+                    </button>
+                  </div>
+
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      className={cn(
+                        'h-full rounded-full transition-all',
+                        modeRes.finalScore >= 70
+                          ? isShort
+                            ? 'bg-rose-600'
+                            : 'bg-emerald-600'
+                          : modeRes.finalScore >= 40
+                          ? 'bg-amber-500'
+                          : 'bg-slate-400'
+                      )}
+                      style={{ width: `${modeRes.finalScore}%` }}
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 font-mono text-[10px] text-slate-600">
+                    <span>
+                      Cluster: <strong>{payload.screener.pillar1ClusterScore}/60</strong>
+                    </span>
+                    <span>·</span>
+                    <span>
+                      Didi Risk: <strong>{payload.screener.pillar2RiskScore}/40</strong> ({payload.screener.didiDistancePct.toFixed(2)}%)
+                    </span>
+                    {modeRes.phase3PenaltyApplied && (
+                      <>
+                        <span>·</span>
+                        <span className="text-rose-700 font-bold">
+                          -25pt Phase 2
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* 6-Timeframe Polarity Strip */}
+              <div className="lg:col-span-7 space-y-1.5">
               <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
                 {ALL_TIMEFRAMES.map((tf) => {
                   const h = payload.screener.horizonMatrix[tf];
@@ -464,18 +498,18 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
               </p>
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* ATS Execution Levels Strip + Layer Toggles */}
         <div className="flex flex-col gap-3 border-t border-slate-200 pt-2.5 lg:flex-row lg:items-center lg:justify-between">
           {payload && (
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs font-mono">
               <div>
-                <span className="text-slate-500">
-                  SL ({isShortSetup ? '+1% Wall' : '-1% Wall'}):{' '}
-                </span>
+                <span className="text-slate-500">Didi Stop-Loss: </span>
                 <span className="text-rose-700 font-bold">
-                  {formatPrice(payload.screener.stopLoss, payload.category)}
+                  {formatPrice(payload.screener.didiStopPrice, payload.category)}{' '}
+                  ({payload.screener.didiDistancePct.toFixed(2)}% away)
                 </span>
               </div>
               <div>

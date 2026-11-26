@@ -16,6 +16,8 @@ export interface ATSUIPreferences {
   showDidi: boolean;
   syncCrosshair: boolean;
   onlyWallCandidates: boolean;
+  /** Execution Toggle: false = Mode A (Aggressive, Toggle OFF), true = Mode B (Conservative Phase 3 required, Toggle ON) */
+  requirePhase3Confirmation: boolean;
   directionFilter: DirectionFilter;
 }
 
@@ -138,6 +140,7 @@ export const useATSStore = create<ATSStoreState>()(
         showDidi: true,
         syncCrosshair: true,
         onlyWallCandidates: false,
+        requirePhase3Confirmation: false,
         directionFilter: 'ALL',
       },
 

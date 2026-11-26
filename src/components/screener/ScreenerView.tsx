@@ -32,6 +32,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { UNIVERSE_PRESETS } from '@/lib/assetUniverses';
+import { resolveExecutionModeResult } from '@/lib/atsScreener';
 import { cn, formatPrice } from '@/lib/utils';
 import { type DirectionFilter, useATSStore } from '@/store/useATSStore';
 import {
@@ -235,31 +236,54 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
   const scanError = screenerErrors[activeCategory];
   const scannedTimestamp = lastScannedAt[activeCategory];
 
+  const requirePhase3 = Boolean(uiPreferences.requirePhase3Confirmation);
+
   const supportWallsCount = useMemo(
-    () => rows.filter((r) => r.direction === 'LONG' && r.isAtWall).length,
-    [rows]
+    () =>
+      rows.filter(
+        (r) =>
+          r.direction === 'LONG' &&
+          resolveExecutionModeResult(r, requirePhase3).finalScore >= 70
+      ).length,
+    [requirePhase3, rows]
   );
   const resistanceWallsCount = useMemo(
-    () => rows.filter((r) => r.direction === 'SHORT' && r.isAtWall).length,
-    [rows]
+    () =>
+      rows.filter(
+        (r) =>
+          r.direction === 'SHORT' &&
+          resolveExecutionModeResult(r, requirePhase3).finalScore >= 70
+      ).length,
+    [requirePhase3, rows]
   );
   const step3PlusCount = useMemo(
-    () => rows.filter((r) => r.setupStep >= 3).length,
+    () => rows.filter((r) => r.isPhase3 && r.pillar1ClusterScore > 0 && !r.isKnockedOut).length,
     [rows]
   );
 
-  const topHitLeaders = useMemo(
+  const sortedByModeRows = useMemo(
     () =>
-      [...rows]
-        .sort((a, b) => b.confidenceScore - a.confidenceScore)
-        .slice(0, 6),
-    [rows]
+      [...rows].sort((a, b) => {
+        const scoreB = resolveExecutionModeResult(b, requirePhase3).finalScore;
+        const scoreA = resolveExecutionModeResult(a, requirePhase3).finalScore;
+        if (scoreB !== scoreA) return scoreB - scoreA;
+        return b.pillar1ClusterScore - a.pillar1ClusterScore;
+      }),
+    [requirePhase3, rows]
+  );
+
+  const topHitLeaders = useMemo(
+    () => sortedByModeRows.slice(0, 6),
+    [sortedByModeRows]
   );
 
   const filteredRows = useMemo(() => {
     const query = tableSearch.trim().toUpperCase();
-    return rows.filter((r) => {
-      if (uiPreferences.onlyWallCandidates && !r.isAtWall) return false;
+    return sortedByModeRows.filter((r) => {
+      const modeRes = resolveExecutionModeResult(r, requirePhase3);
+      if (uiPreferences.onlyWallCandidates && modeRes.finalScore < 40) {
+        return false;
+      }
       if (
         uiPreferences.directionFilter === 'LONG' &&
         r.direction !== 'LONG'
@@ -275,13 +299,14 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
       if (query) {
         const hay = `${r.symbol} ${r.displaySymbol} ${r.name || ''} ${
           r.activeWallLabel
-        } ${r.thesisHeadline}`.toUpperCase();
+        } ${modeRes.tradeAction} ${r.thesisHeadline}`.toUpperCase();
         if (!hay.includes(query)) return false;
       }
       return true;
     });
   }, [
-    rows,
+    requirePhase3,
+    sortedByModeRows,
     tableSearch,
     uiPreferences.directionFilter,
     uiPreferences.onlyWallCandidates,
@@ -402,12 +427,12 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
           <CardContent className="p-4 flex items-center justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                LONG • Green Support Walls
+                BUY / STRONG BUY (&ge;70)
               </p>
               <p className="mt-1 text-2xl font-bold font-mono text-emerald-700">
                 {supportWallsCount}{' '}
                 <span className="text-xs font-normal text-slate-500">
-                  (&le;1% above floor)
+                  ({requirePhase3 ? 'Mode B' : 'Mode A'})
                 </span>
               </p>
             </div>
@@ -421,12 +446,12 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
           <CardContent className="p-4 flex items-center justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                SHORT • Red Resistance Walls
+                SELL / STRONG SELL (&ge;70)
               </p>
               <p className="mt-1 text-2xl font-bold font-mono text-rose-700">
                 {resistanceWallsCount}{' '}
                 <span className="text-xs font-normal text-slate-500">
-                  (&le;1% below ceiling)
+                  ({requirePhase3 ? 'Mode B' : 'Mode A'})
                 </span>
               </p>
             </div>
@@ -440,7 +465,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
           <CardContent className="p-4 flex items-center justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Step 3–4 Vol. Confirmed
+                Phase 3 Confirmed Clusters
               </p>
               <p className="mt-1 text-2xl font-bold font-mono text-sky-700">
                 {step3PlusCount}{' '}
@@ -601,9 +626,47 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
             >
               <Filter className="h-3 w-3" />
               {uiPreferences.onlyWallCandidates
-                ? 'Active <=1% Walls Only'
-                : 'Showing All Distances'}
+                ? 'Score >=40 (Watchlist+)'
+                : 'Showing All Scores'}
             </Button>
+
+            {/* Execution Mode Toggle: Mode A (Aggressive — OFF) vs Mode B (Conservative Phase 3 — ON) */}
+            <div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-100 p-0.5">
+              <button
+                type="button"
+                onClick={() => {
+                  if (requirePhase3) {
+                    toggleUIPreference('requirePhase3Confirmation');
+                  }
+                }}
+                title="Mode A (Aggressive — Toggle OFF): Final Score = Base Score (Cluster + Didi Risk)"
+                className={cn(
+                  'rounded-md px-2.5 py-1 text-xs font-semibold transition-all',
+                  !requirePhase3
+                    ? 'bg-white text-slate-900 shadow-sm font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                )}
+              >
+                Mode A: Aggressive (OFF)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!requirePhase3) {
+                    toggleUIPreference('requirePhase3Confirmation');
+                  }
+                }}
+                title="Mode B (Conservative — Toggle ON): Requires Phase 3 Bollinger confirmation, otherwise applies -25 pt penalty"
+                className={cn(
+                  'rounded-md px-2.5 py-1 text-xs font-semibold transition-all',
+                  requirePhase3
+                    ? 'bg-sky-600 text-white shadow-sm font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                )}
+              >
+                Mode B: Phase 3 Req (ON)
+              </button>
+            </div>
           </div>
 
           <div className="relative w-full sm:w-64">
@@ -645,6 +708,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             {topHitLeaders.map((hit, idx) => {
               const isShort = hit.direction === 'SHORT';
+              const hitMode = resolveExecutionModeResult(hit, requirePhase3);
               return (
                 <button
                   key={hit.symbol}
@@ -652,9 +716,9 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                   onClick={() => onSelectCandidate(hit.symbol, hit.category)}
                   className={cn(
                     'flex flex-col justify-between rounded-xl border p-3 text-left transition-all shadow-sm hover:-translate-y-0.5 bg-white',
-                    isShort && hit.isAtWall
+                    hitMode.finalScore >= 70 && isShort
                       ? 'border-rose-300 bg-rose-50/40 hover:border-rose-500'
-                      : hit.direction === 'LONG' && hit.isAtWall
+                      : hitMode.finalScore >= 70 && hit.direction === 'LONG'
                       ? 'border-emerald-300 bg-emerald-50/40 hover:border-emerald-500'
                       : 'border-slate-200 hover:border-slate-400'
                   )}
@@ -671,16 +735,16 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                     <span
                       className={cn(
                         'rounded-md border px-1.5 py-0.5 font-mono text-xs font-extrabold shrink-0',
-                        hit.confidenceScore >= 70
+                        hitMode.finalScore >= 70
                           ? isShort
                             ? 'border-rose-300 bg-rose-100 text-rose-800'
                             : 'border-emerald-300 bg-emerald-100 text-emerald-800'
-                          : hit.confidenceScore >= 45
+                          : hitMode.finalScore >= 40
                           ? 'border-amber-300 bg-amber-100 text-amber-800'
-                          : 'border-slate-200 bg-slate-100 text-slate-700'
+                          : 'border-slate-200 bg-slate-100 text-slate-600'
                       )}
                     >
-                      {hit.confidenceScore}%
+                      {hitMode.finalScore}%
                     </span>
                   </div>
 
@@ -690,15 +754,17 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                     </span>
                     <Badge
                       variant={
-                        isShort
-                          ? 'resistance'
-                          : hit.direction === 'LONG'
-                          ? 'support'
+                        hitMode.finalScore >= 70
+                          ? isShort
+                            ? 'resistance'
+                            : 'support'
+                          : hitMode.finalScore >= 40
+                          ? 'amber'
                           : 'outline'
                       }
                       className="text-[9px] px-1.5 py-0"
                     >
-                      {hit.direction}
+                      {hitMode.tradeAction}
                     </Badge>
                   </div>
 
@@ -752,6 +818,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                 const isPositive24h = row.change24hPct >= 0;
                 const isExpanded = expandedSymbol === row.symbol;
                 const isShort = row.direction === 'SHORT';
+                const modeRes = resolveExecutionModeResult(row, requirePhase3);
 
                 return (
                   <React.Fragment key={row.symbol}>
@@ -761,9 +828,9 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                       }
                       className={cn(
                         'cursor-pointer group transition-colors',
-                        row.direction === 'LONG' && row.isAtWall
+                        modeRes.finalScore >= 70 && row.direction === 'LONG'
                           ? 'bg-emerald-50/40 hover:bg-emerald-50/80'
-                          : row.direction === 'SHORT' && row.isAtWall
+                          : modeRes.finalScore >= 70 && row.direction === 'SHORT'
                           ? 'bg-rose-50/40 hover:bg-rose-50/80'
                           : 'hover:bg-slate-50'
                       )}
@@ -775,7 +842,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                             <span className="font-mono text-sm font-bold text-slate-900 group-hover:text-emerald-700 transition-colors">
                               {row.displaySymbol}
                             </span>
-                            {row.isAtWall && (
+                            {modeRes.finalScore >= 70 && (
                               <span
                                 className={cn(
                                   'inline-block h-2 w-2 rounded-full',
@@ -808,38 +875,31 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                         </div>
                       </TableCell>
 
-                      {/* 2. Setup Direction, Signal Status (Orange vs Vert/Rouge) & Thesis */}
-                      <TableCell className="align-top max-w-[320px]">
+                      {/* 2. Trade Action Output, Cluster Wall & Breakdown */}
+                      <TableCell className="align-top max-w-[330px]">
                         <div className="space-y-1">
                           <div className="flex flex-wrap items-center gap-1.5">
-                            {row.signalStatus === 'CONFIRMED' ? (
-                              <Badge
-                                variant={isShort ? 'resistance' : 'support'}
-                                className="font-mono text-[10px]"
-                              >
-                                {isShort
-                                  ? '● SIGNAL ROUGE CONFIRMÉ'
-                                  : '● SIGNAL VERT CONFIRMÉ'}
-                              </Badge>
-                            ) : row.signalStatus === 'CANDIDATE' ? (
-                              <Badge
-                                variant="amber"
-                                className="font-mono text-[10px]"
-                              >
-                                ● SIGNAL ORANGE (Candidat)
-                              </Badge>
-                            ) : (
-                              <Badge
-                                variant="outline"
-                                className="font-mono text-[10px]"
-                              >
-                                SURVEILLANCE
-                              </Badge>
-                            )}
+                            <Badge
+                              variant={
+                                modeRes.finalScore >= 70
+                                  ? isShort
+                                    ? 'resistance'
+                                    : 'support'
+                                  : modeRes.finalScore >= 40
+                                  ? 'amber'
+                                  : 'outline'
+                              }
+                              className={cn(
+                                'font-mono text-[10px]',
+                                modeRes.finalScore >= 85 && 'font-extrabold ring-1 ring-current'
+                              )}
+                            >
+                              {modeRes.tradeAction}
+                            </Badge>
 
                             <Badge
                               variant={
-                                row.isAtWall
+                                row.pillar1ClusterScore > 0 && !row.isKnockedOut
                                   ? isShort
                                     ? 'resistance'
                                     : 'support'
@@ -852,7 +912,22 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                           </div>
 
                           <p className="text-xs text-slate-700 leading-snug">
-                            {row.thesisHeadline}
+                            {row.isKnockedOut
+                              ? `Knockout Rule: Price breached Didi (${formatPrice(
+                                  row.didiStopPrice,
+                                  row.category
+                                )}) → Score = 0`
+                              : row.pillar1ClusterScore > 0
+                              ? `Cluster ${row.pillar1ClusterScore}/60 + Didi Risk ${row.pillar2RiskScore}/40 (${row.didiDistancePct.toFixed(
+                                  2
+                                )}% to Didi)${
+                                  modeRes.phase3PenaltyApplied
+                                    ? ' − 25 Phase 2 Penalty'
+                                    : row.isPhase3
+                                    ? ' • Phase 3 Confirmed'
+                                    : ''
+                                }`
+                              : row.thesisHeadline}
                           </p>
                         </div>
                       </TableCell>
@@ -926,37 +1001,41 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                         </div>
                       </TableCell>
 
-                      {/* 4. Confidence Score & Setup Step */}
+                      {/* 4. Final Score & Pillar Breakdown */}
                       <TableCell className="align-top">
-                        <div className="space-y-1.5 min-w-[155px]">
+                        <div className="space-y-1.5 min-w-[165px]">
                           <div className="flex items-center justify-between gap-2">
                             <span
                               className={cn(
                                 'font-mono text-sm font-bold',
-                                row.confidenceScore >= 70
+                                modeRes.finalScore >= 70
                                   ? isShort
                                     ? 'text-rose-700'
                                     : 'text-emerald-700'
-                                  : row.confidenceScore >= 45
+                                  : modeRes.finalScore >= 40
                                   ? 'text-amber-700'
-                                  : 'text-slate-600'
+                                  : 'text-slate-500'
                               )}
                             >
-                              {row.confidenceScore}%
+                              {modeRes.finalScore}%
                             </span>
                             <Badge
                               variant={
-                                row.setupStep >= 3
+                                row.isPhase3 && row.pillar1ClusterScore > 0
                                   ? 'support'
-                                  : row.setupStep >= 1
+                                  : row.pillar1ClusterScore > 0
                                   ? 'amber'
                                   : 'outline'
                               }
                               className="text-[10px] px-1.5 py-0"
                             >
-                              {row.setupStep > 0
-                                ? `STEP ${row.setupStep}/4`
-                                : 'WATCH'}
+                              {row.isKnockedOut
+                                ? 'KNOCKOUT'
+                                : row.isPhase3 && row.pillar1ClusterScore > 0
+                                ? 'PHASE 3'
+                                : row.pillar1ClusterScore > 0
+                                ? 'PHASE 2'
+                                : 'NO WALL'}
                             </Badge>
                           </div>
 
@@ -964,73 +1043,58 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                             <div
                               className={cn(
                                 'h-full rounded-full transition-all',
-                                row.confidenceScore >= 70
+                                modeRes.finalScore >= 70
                                   ? isShort
                                     ? 'bg-rose-600'
                                     : 'bg-emerald-600'
-                                  : row.confidenceScore >= 45
+                                  : modeRes.finalScore >= 40
                                   ? 'bg-amber-500'
                                   : 'bg-slate-400'
                               )}
-                              style={{ width: `${row.confidenceScore}%` }}
+                              style={{ width: `${modeRes.finalScore}%` }}
                             />
                           </div>
 
-                          <div className="flex items-center gap-1 text-[9px] font-mono font-semibold">
+                          <div className="flex flex-wrap items-center gap-1 text-[9px] font-mono font-semibold">
                             <span
                               className={cn(
                                 'rounded px-1 border',
-                                row.stepFlags.step1Wall
+                                row.pillar1ClusterScore > 0 && !row.isKnockedOut
                                   ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
                                   : 'border-slate-200 text-slate-400'
                               )}
                             >
-                              1:Macro
+                              C:{row.pillar1ClusterScore}/60
                             </span>
                             <span
                               className={cn(
                                 'rounded px-1 border',
-                                row.stepFlags.step2Didi
-                                  ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                                  : 'border-slate-200 text-slate-400'
-                              )}
-                            >
-                              2:DeeDee
-                            </span>
-                            <span
-                              className={cn(
-                                'rounded px-1 border',
-                                row.stepFlags.step3VolatilityReversal
+                                row.pillar2RiskScore > 0 && !row.isKnockedOut
                                   ? 'border-sky-300 bg-sky-50 text-sky-800'
                                   : 'border-slate-200 text-slate-400'
                               )}
                             >
-                              3:Phase3
+                              Didi:{row.pillar2RiskScore}/40
                             </span>
-                            <span
-                              className={cn(
-                                'rounded px-1 border',
-                                row.stepFlags.step4MacroM20
-                                  ? 'border-amber-300 bg-amber-50 text-amber-800'
-                                  : 'border-slate-200 text-slate-400'
-                              )}
-                            >
-                              4:M20
-                            </span>
+                            {modeRes.phase3PenaltyApplied && (
+                              <span className="rounded px-1 border border-rose-300 bg-rose-50 text-rose-800">
+                                -25 Ph2
+                              </span>
+                            )}
                           </div>
                         </div>
                       </TableCell>
 
-                      {/* 5. Stop Loss & Didi Targets */}
+                      {/* 5. Didi Stop-Loss & Targets */}
                       <TableCell className="align-top">
                         <div className="space-y-1 font-mono text-xs min-w-[180px]">
                           <div className="flex items-center gap-1.5">
-                            <span className="text-slate-500">SL:</span>
+                            <span className="text-slate-500">Didi SL:</span>
                             <span className="text-rose-700 font-bold">
-                              {formatPrice(row.stopLoss, row.category)}
+                              {formatPrice(row.didiStopPrice, row.category)}
                             </span>
                             <span className="text-[10px] text-slate-500">
-                              ({isShort ? '+0.5% wall' : '-0.5% wall'})
+                              ({row.didiDistancePct.toFixed(2)}%)
                             </span>
                           </div>
 
@@ -1142,19 +1206,21 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                                     ATS Quantitative Reasoning —{' '}
                                     {row.displaySymbol}
                                   </span>
-                                  <Badge
-                                    variant={
-                                      row.direction === 'SHORT'
-                                        ? 'resistance'
-                                        : row.direction === 'LONG'
-                                        ? 'support'
-                                        : 'outline'
-                                    }
-                                    className="font-mono text-[10px]"
-                                  >
-                                    {row.direction} SETUP ({row.confidenceScore}
-                                    % CONFIDENCE)
-                                  </Badge>
+                                    <Badge
+                                      variant={
+                                        modeRes.finalScore >= 70
+                                          ? row.direction === 'SHORT'
+                                            ? 'resistance'
+                                            : 'support'
+                                          : modeRes.finalScore >= 40
+                                          ? 'amber'
+                                          : 'outline'
+                                      }
+                                      className="font-mono text-[10px]"
+                                    >
+                                      {modeRes.tradeAction} ({modeRes.finalScore}
+                                      /100)
+                                    </Badge>
                                 </h4>
                                 <ul className="mt-2 space-y-1 text-xs text-slate-700 list-disc pl-5">
                                   {row.reasoningBullets.map((bullet, bIdx) => (

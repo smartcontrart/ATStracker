@@ -45,6 +45,13 @@ export const TIMEFRAME_LABELS: Record<Timeframe, string> = {
 export type ATSPolarity = 'GREEN' | 'RED';
 export type SetupDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
 export type SetupConfirmationStatus = 'CONFIRMED' | 'CANDIDATE' | 'WATCH';
+export type TradeActionOutput =
+  | 'STRONG BUY'
+  | 'STRONG SELL'
+  | 'BUY'
+  | 'SELL'
+  | 'WATCHLIST'
+  | 'IGNORE / INVALIDATED';
 
 export type JackLineKey = 'Jack_Minus1' | 'Jack_0' | 'Jack_Plus1';
 export type OggyLineKey = 'Oggy_Minus1' | 'Oggy_0' | 'Oggy_Plus1';
@@ -242,7 +249,27 @@ export interface ScreenerResult {
   confluentResistanceLines: ATSBaseline[];
   nearestGreenSupport: ATSBaseline | null;
   nearestRedResistance: ATSBaseline | null;
+  /** Mode A (Aggressive) Base Score (0..100): Pillar 1 Cluster (0..60) + Pillar 2 Didi Risk (0..40), or 0 if knocked out */
   confidenceScore: number;
+  baseScore: number;
+  /** Mode B (Conservative) Final Score (0..100): Base Score if Phase 3 confirmed, else max(0, Base Score - 25) */
+  conservativeScore: number;
+  /** Pillar 1: Higher-Timeframe Support/Resistance Cluster score (0..60) */
+  pillar1ClusterScore: number;
+  /** Pillar 2: Proximity to Didi stop-loss risk score (0, 20, or 40) */
+  pillar2RiskScore: number;
+  /** Didi stop-loss price (lowest price of drop for Buy, highest price of rally for Sell) */
+  didiStopPrice: number;
+  /** Percentage distance between current livePrice and didiStopPrice */
+  didiDistancePct: number;
+  /** True if current price breached an established Didi stop-loss level (immediate score = 0) */
+  isKnockedOut: boolean;
+  /** True if opposite Bollinger Band is hooking inward towards price (Phase 3 confirmed) */
+  isPhase3: boolean;
+  /** Trade recommendation for Mode A (Aggressive — Toggle OFF) */
+  tradeActionAggressive: TradeActionOutput;
+  /** Trade recommendation for Mode B (Conservative — Toggle ON) */
+  tradeActionConservative: TradeActionOutput;
   setupStep: 0 | 1 | 2 | 3 | 4;
   stepFlags: {
     step1Wall: boolean;

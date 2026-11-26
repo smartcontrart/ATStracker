@@ -13,6 +13,7 @@ import {
 import { GlobalAssetLookup } from '@/components/search/GlobalAssetLookup';
 import { Badge } from '@/components/ui/badge';
 import { MarketToggle } from '@/components/ui/market-toggle';
+import { resolveExecutionModeResult } from '@/lib/atsScreener';
 import { cn } from '@/lib/utils';
 import { type ActiveDashboardView, useATSStore } from '@/store/useATSStore';
 import type { AssetCategory } from '@/types/ats';
@@ -41,43 +42,60 @@ export const Sidebar: React.FC<SidebarProps> = ({
     watchlists,
     screenerResults,
     screenerLoading,
+    uiPreferences,
   } = useATSStore();
 
+  const requirePhase3 = Boolean(uiPreferences.requirePhase3Confirmation);
+
+  const countActionable = (list: typeof screenerResults.stocks) =>
+    list.filter(
+      (r) => resolveExecutionModeResult(r, requirePhase3).finalScore >= 70
+    ).length;
+
   const totalWallHits =
-    screenerResults.stocks.filter((r) => r.isAtWall).length +
-    screenerResults.crypto.filter((r) => r.isAtWall).length +
-    screenerResults.forex.filter((r) => r.isAtWall).length;
+    countActionable(screenerResults.stocks) +
+    countActionable(screenerResults.crypto) +
+    countActionable(screenerResults.forex);
 
   const selectedAssetScore = useMemo(() => {
     const found = screenerResults[selectedAsset.category].find(
       (r) => r.symbol === selectedAsset.symbol
     );
-    return found ? found.confidenceScore : null;
-  }, [screenerResults, selectedAsset.category, selectedAsset.symbol]);
+    return found
+      ? resolveExecutionModeResult(found, requirePhase3).finalScore
+      : null;
+  }, [requirePhase3, screenerResults, selectedAsset.category, selectedAsset.symbol]);
 
   const sidebarItems = useMemo(() => {
     const scanned = [...screenerResults[activeCategory]].sort(
-      (a, b) => b.confidenceScore - a.confidenceScore
+      (a, b) =>
+        resolveExecutionModeResult(b, requirePhase3).finalScore -
+        resolveExecutionModeResult(a, requirePhase3).finalScore
     );
     if (scanned.length > 0) {
-      return scanned.slice(0, 25).map((r) => ({
-        symbol: r.symbol,
-        displaySymbol: r.displaySymbol,
-        score: r.confidenceScore,
-        isAtWall: r.isAtWall,
-        direction: r.direction,
-        wallLabel: r.activeWallLabel,
-      }));
+      return scanned.slice(0, 25).map((r) => {
+        const modeRes = resolveExecutionModeResult(r, requirePhase3);
+        return {
+          symbol: r.symbol,
+          displaySymbol: r.displaySymbol,
+          score: modeRes.finalScore,
+          tradeAction: modeRes.tradeAction,
+          isAtWall: r.isAtWall,
+          direction: r.direction,
+          wallLabel: r.activeWallLabel,
+        };
+      });
     }
     return watchlists[activeCategory].slice(0, 20).map((sym) => ({
       symbol: sym,
       displaySymbol: sym.replace(/=X$/, ''),
       score: null as number | null,
+      tradeAction: 'WATCHLIST' as const,
       isAtWall: false,
       direction: 'NEUTRAL' as const,
       wallLabel: '',
     }));
-  }, [activeCategory, screenerResults, watchlists]);
+  }, [activeCategory, requirePhase3, screenerResults, watchlists]);
 
   return (
     <aside className="flex w-full flex-col border-b border-slate-200 bg-white lg:sticky lg:top-0 lg:h-screen lg:w-64 xl:w-72 lg:shrink-0 lg:border-b-0 lg:border-r">
@@ -191,9 +209,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 ? item.direction === 'SHORT'
                   ? 'border-rose-300 bg-rose-50 text-rose-800'
                   : 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                : item.score >= 45
+                : item.score >= 40
                 ? 'border-amber-300 bg-amber-50 text-amber-800'
-                : 'border-slate-200 bg-slate-100 text-slate-700';
+                : 'border-slate-200 bg-slate-100 text-slate-500';
 
             return (
               <button
@@ -201,7 +219,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 type="button"
                 title={
                   item.score !== null
-                    ? `${item.displaySymbol} — Confidence: ${item.score}% (${item.direction} • ${item.wallLabel})`
+                    ? `${item.displaySymbol} — ${item.tradeAction} (${item.score}% • ${item.wallLabel})`
                     : `${item.displaySymbol} — Scoring MTF polarity...`
                 }
                 onClick={() => onSelectAsset(item.symbol, activeCategory)}
