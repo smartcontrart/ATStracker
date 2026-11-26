@@ -101,14 +101,17 @@ export function computeAutourWeight(
 
 /**
  * Evaluates structural polarity (Support vs Resistance), AT.S "Autour" halo,
- * and whether subsequent price action truly pierced ("transpercé") the baseline.
+ * and whether the recent price swing truly pierced ("transpercé") the baseline.
+ * Matches TradingView AT.S / `setup1234.pine`: ancient oscillations from months/years
+ * prior do NOT invalidate a level if the current swing approaches cleanly and holds "Autour".
  */
 function evaluateBaselineIntegrity(
   bars: OHLCVBar[],
   refIdx: number,
   levelPrice: number,
   currentPrice: number,
-  timeframe: Timeframe
+  timeframe: Timeframe,
+  recentDailyBars?: OHLCVBar[]
 ): {
   polarity: ATSPolarity;
   isPierced: boolean;
@@ -119,26 +122,118 @@ function evaluateBaselineIntegrity(
   const maxOvershootPct = AUTOUR_OVERSHOOT_TOL_PCT[timeframe];
   const tolFrac = maxOvershootPct / 100;
 
-  // Determine structural side from bars between refIdx + 1 and lastIdx - 1
-  let aboveCount = 0;
-  let belowCount = 0;
-  for (let j = refIdx + 1; j < lastIdx; j++) {
-    if (bars[j].close > levelPrice) aboveCount++;
-    else if (bars[j].close < levelPrice) belowCount++;
+  const dailyConsistent =
+    Boolean(recentDailyBars) &&
+    recentDailyBars!.length >= 4 &&
+    Math.abs(
+      recentDailyBars![recentDailyBars!.length - 1].close - bars[lastIdx].close
+    ) <= Math.max(0.01, bars[lastIdx].close * 0.02);
+
+  if (dailyConsistent && recentDailyBars) {
+    const afterRef = recentDailyBars.filter(
+      (b) => b.time > bars[refIdx].time
+    );
+    const recent = afterRef.slice(-10);
+
+    if (recent.length >= 2) {
+      const priorSlice = recent.slice(
+        Math.max(0, recent.length - 6),
+        recent.length - 1
+      );
+      const priorAvgClose =
+        priorSlice.reduce((sum, b) => sum + b.close, 0) / priorSlice.length;
+
+      const maxClose = Math.max(...recent.map((b) => b.close));
+      const minClose = Math.min(...recent.map((b) => b.close));
+      const breakFloor = levelPrice * (1 - tolFrac);
+      const breakCeiling = levelPrice * (1 + tolFrac);
+
+      // Sliced straight across level in recent sessions ("transpercé — ne fait plus effet")
+      const slicedThroughCloses =
+        maxClose > breakCeiling && minClose < breakFloor;
+
+      const structuralSupport =
+        priorAvgClose > levelPrice ||
+        (priorAvgClose === levelPrice && currentPrice >= levelPrice);
+
+      if (structuralSupport) {
+        const piercedDown =
+          currentPrice < breakFloor ||
+          slicedThroughCloses ||
+          minClose < breakFloor;
+
+        if (piercedDown) {
+          return {
+            polarity: resolveATSPolarity(currentPrice, levelPrice),
+            isPierced: true,
+            autourZone: 'PIERCED',
+            autourWeight: 0,
+          };
+        }
+
+        const signedApproachPct =
+          ((currentPrice - levelPrice) / levelPrice) * 100;
+        const { zone, weight } = computeAutourWeight(
+          signedApproachPct,
+          maxOvershootPct
+        );
+        return {
+          polarity: 'GREEN',
+          isPierced: false,
+          autourZone: zone,
+          autourWeight: weight,
+        };
+      } else {
+        const piercedUp =
+          currentPrice > breakCeiling ||
+          slicedThroughCloses ||
+          maxClose > breakCeiling;
+
+        if (piercedUp) {
+          return {
+            polarity: resolveATSPolarity(currentPrice, levelPrice),
+            isPierced: true,
+            autourZone: 'PIERCED',
+            autourWeight: 0,
+          };
+        }
+
+        const signedApproachPct =
+          ((levelPrice - currentPrice) / levelPrice) * 100;
+        const { zone, weight } = computeAutourWeight(
+          signedApproachPct,
+          maxOvershootPct
+        );
+        return {
+          polarity: 'RED',
+          isPierced: false,
+          autourZone: zone,
+          autourWeight: weight,
+        };
+      }
+    }
   }
 
+  // Fallback on single-timeframe series (or synthetic unit test bars)
+  const recentStart = Math.max(refIdx + 1, lastIdx - 3);
+  const priorBars = bars.slice(recentStart, lastIdx);
+  const anchor =
+    priorBars.length > 0
+      ? priorBars.reduce((sum, b) => sum + b.close, 0) / priorBars.length
+      : bars[lastIdx].open;
+
   const structuralSupport =
-    aboveCount > belowCount ||
-    (aboveCount === belowCount && currentPrice >= levelPrice);
+    anchor > levelPrice || (anchor === levelPrice && currentPrice >= levelPrice);
 
   if (structuralSupport) {
-    // Check if any bar after departure pierced decisively below (levelPrice * (1 - tolFrac))
     const breakFloor = levelPrice * (1 - tolFrac);
-    let piercedDown = currentPrice < breakFloor || bars[lastIdx].low < breakFloor;
+    let piercedDown =
+      currentPrice < breakFloor ||
+      bars[lastIdx].low < levelPrice * (1 - tolFrac * 1.25);
 
     if (!piercedDown) {
-      for (let j = refIdx + 2; j <= lastIdx; j++) {
-        if (bars[j].low < breakFloor) {
+      for (const b of priorBars) {
+        if (b.close < breakFloor) {
           piercedDown = true;
           break;
         }
@@ -146,7 +241,6 @@ function evaluateBaselineIntegrity(
     }
 
     if (piercedDown) {
-      // Price broke decisively through support (e.g., 97$ on 100$): transpercé -> ne fait plus effet
       return {
         polarity: resolveATSPolarity(currentPrice, levelPrice),
         isPierced: true,
@@ -160,7 +254,6 @@ function evaluateBaselineIntegrity(
       signedApproachPct,
       maxOvershootPct
     );
-    // Remains GREEN Support even on a -0.5% / -1.0% "Autour" dip (e.g. 99.5$ / 99$ on 100$)
     return {
       polarity: 'GREEN',
       isPierced: false,
@@ -168,14 +261,14 @@ function evaluateBaselineIntegrity(
       autourWeight: weight,
     };
   } else {
-    // Structural Resistance: approached from below
     const breakCeiling = levelPrice * (1 + tolFrac);
     let piercedUp =
-      currentPrice > breakCeiling || bars[lastIdx].high > breakCeiling;
+      currentPrice > breakCeiling ||
+      bars[lastIdx].high > levelPrice * (1 + tolFrac * 1.25);
 
     if (!piercedUp) {
-      for (let j = refIdx + 2; j <= lastIdx; j++) {
-        if (bars[j].high > breakCeiling) {
+      for (const b of priorBars) {
+        if (b.close > breakCeiling) {
           piercedUp = true;
           break;
         }
@@ -191,7 +284,6 @@ function evaluateBaselineIntegrity(
       };
     }
 
-    // Signed approach for resistance: positive when below resistance, negative on slight "Autour" poke above
     const signedApproachPct = ((levelPrice - currentPrice) / levelPrice) * 100;
     const { zone, weight } = computeAutourWeight(
       signedApproachPct,
@@ -212,7 +304,8 @@ function buildBaseline(
   timeframe: Timeframe,
   key: ATSLineKey,
   family: 'Jack' | 'Oggy',
-  offset: number
+  offset: number,
+  recentDailyBars?: OHLCVBar[]
 ): ATSBaseline | null {
   const targetIdx = bars.length - 1 - offset;
   if (targetIdx < 0 || targetIdx >= bars.length) {
@@ -230,7 +323,14 @@ function buildBaseline(
     (Math.abs(currentPrice - price) / currentPrice) * 100;
 
   const { polarity, isPierced, autourZone, autourWeight } =
-    evaluateBaselineIntegrity(bars, targetIdx, price, currentPrice, timeframe);
+    evaluateBaselineIntegrity(
+      bars,
+      targetIdx,
+      price,
+      currentPrice,
+      timeframe,
+      recentDailyBars
+    );
 
   const shouldPlotOnChart =
     !isPierced && absDistanceFromLivePct <= CHART_PROXIMITY_PCT_BY_TF[timeframe];
@@ -259,7 +359,8 @@ function buildBaseline(
 export function calculateJackMatrix(
   bars: OHLCVBar[],
   currentPrice: number,
-  timeframe: Timeframe
+  timeframe: Timeframe,
+  recentDailyBars?: OHLCVBar[]
 ): JackMatrix {
   return {
     Jack_Minus1: buildBaseline(
@@ -268,16 +369,26 @@ export function calculateJackMatrix(
       timeframe,
       'Jack_Minus1',
       'Jack',
-      21
+      21,
+      recentDailyBars
     ),
-    Jack_0: buildBaseline(bars, currentPrice, timeframe, 'Jack_0', 'Jack', 20),
+    Jack_0: buildBaseline(
+      bars,
+      currentPrice,
+      timeframe,
+      'Jack_0',
+      'Jack',
+      20,
+      recentDailyBars
+    ),
     Jack_Plus1: buildBaseline(
       bars,
       currentPrice,
       timeframe,
       'Jack_Plus1',
       'Jack',
-      19
+      19,
+      recentDailyBars
     ),
   };
 }
@@ -288,7 +399,8 @@ export function calculateJackMatrix(
 export function calculateOggyMatrix(
   bars: OHLCVBar[],
   currentPrice: number,
-  timeframe: Timeframe
+  timeframe: Timeframe,
+  recentDailyBars?: OHLCVBar[]
 ): OggyMatrix {
   return {
     Oggy_Minus1: buildBaseline(
@@ -297,16 +409,26 @@ export function calculateOggyMatrix(
       timeframe,
       'Oggy_Minus1',
       'Oggy',
-      8
+      8,
+      recentDailyBars
     ),
-    Oggy_0: buildBaseline(bars, currentPrice, timeframe, 'Oggy_0', 'Oggy', 7),
+    Oggy_0: buildBaseline(
+      bars,
+      currentPrice,
+      timeframe,
+      'Oggy_0',
+      'Oggy',
+      7,
+      recentDailyBars
+    ),
     Oggy_Plus1: buildBaseline(
       bars,
       currentPrice,
       timeframe,
       'Oggy_Plus1',
       'Oggy',
-      6
+      6,
+      recentDailyBars
     ),
   };
 }
@@ -408,6 +530,19 @@ export function calculateBollingerBands(
   }
 
   return points;
+}
+
+export function calculateTypicalBollingerBands(
+  bars: OHLCVBar[],
+  period = 20,
+  stdDevMultiplier = 2
+): BollingerBandPoint[] {
+  if (bars.length < period) return [];
+  const typicalBars: OHLCVBar[] = bars.map((b) => ({
+    ...b,
+    close: (b.high + b.low + b.close) / 3,
+  }));
+  return calculateBollingerBands(typicalBars, period, stdDevMultiplier);
 }
 
 export function detectBollingerCompression(
@@ -641,10 +776,21 @@ const EMPTY_SETUP_1234: TimeframeSetup1234 = {
 export function calculateTimeframeATS(
   bars: OHLCVBar[],
   currentPrice: number,
-  timeframe: Timeframe
+  timeframe: Timeframe,
+  recentDailyBars?: OHLCVBar[]
 ): TimeframeATSData {
-  const Jack = calculateJackMatrix(bars, currentPrice, timeframe);
-  const Oggy = calculateOggyMatrix(bars, currentPrice, timeframe);
+  const Jack = calculateJackMatrix(
+    bars,
+    currentPrice,
+    timeframe,
+    recentDailyBars
+  );
+  const Oggy = calculateOggyMatrix(
+    bars,
+    currentPrice,
+    timeframe,
+    recentDailyBars
+  );
 
   const sma7 = calculateSMASeries(bars, 7);
   const sma20 = calculateSMASeries(bars, 20);
@@ -708,7 +854,8 @@ export function calculateTimeframeATS(
 
 /**
  * Port of `setup1234.pine` signal detection across timeframes:
- * - Checks Higher-Timeframe "Autour" confluences (Oggy/Jack, M7, M20, SAR Wilder, BB Low/High)
+ * - Checks Higher-Timeframe "Autour" confluences (Oggy/Jack, M7, M20, SAR Wilder, BB Low/High + hlc3 BB)
+ * - Active age window: up to `confirmed_max_age = 8` daily bars (provided TP2 SMA20 not yet closed across & SL intact)
  * - Signal Orange (CANDIDATE): setup detected at HTF macro level, awaiting opposite BB turn
  * - Signal Vert/Rouge (CONFIRMED): opposite BB has turned inward (Phase 3)
  * - Materializes the 2 black target dots (`2 billes noires`): TP1 = SMA 7, TP2 = SMA 20
@@ -717,6 +864,12 @@ function populateSetup1234Signals(
   timeframes: Record<Timeframe, TimeframeATSData>,
   currentPrice: number
 ): void {
+  const hlc3BBByTf = {} as Record<Timeframe, BollingerBandPoint | null>;
+  for (const tf of ALL_TIMEFRAMES) {
+    const typ = calculateTypicalBollingerBands(timeframes[tf].bars, 20, 2);
+    hlc3BBByTf[tf] = typ.length > 0 ? typ[typ.length - 1] : null;
+  }
+
   for (const tf of ALL_TIMEFRAMES) {
     const tfData = timeframes[tf];
     const bars = tfData.bars;
@@ -730,8 +883,11 @@ function populateSetup1234Signals(
     );
     if (higherTfs.length === 0) continue;
 
-    // Inspect recent 4 bars (allowing a setup detected 0..3 bars ago like candidate_max_age / confirmed_max_age in setup1234.pine)
-    const maxLookback = Math.min(3, bars.length - 2);
+    // Matches `confirmed_max_age` in setup1234.pine: 8 bars on 1D, 2 bars on HTFs
+    const maxAge = tf === 'D' ? 8 : 2;
+    const maxLookback = Math.min(maxAge, bars.length - 2);
+    const sma20Offset = bars.length - tfData.sma20.length;
+
     let bestSignalBarIdx = -1;
     let isBullSetup = true;
     let chosenConfluences: string[] = [];
@@ -742,24 +898,50 @@ function populateSetup1234Signals(
       const bullHits: string[] = [];
       const bearHits: string[] = [];
 
+      // Validate post-trigger invalidation & SMA20 finalization (setup1234.pine lines 414-427)
+      let bullStillValid = true;
+      let bearStillValid = true;
+      if (lb > 0) {
+        const bullInvalidFloor = testBar.low * 0.992;
+        const bearInvalidCeil = testBar.high * 1.008;
+        for (let k = barIdx + 1; k < bars.length; k++) {
+          const s20Idx = k - sma20Offset;
+          const s20AtK =
+            s20Idx >= 0 && s20Idx < tfData.sma20.length
+              ? tfData.sma20[s20Idx].value
+              : tfData.latestSMA20.value;
+
+          if (bars[k].close < bullInvalidFloor || bars[k].close >= s20AtK) {
+            bullStillValid = false;
+          }
+          if (bars[k].close > bearInvalidCeil || bars[k].close <= s20AtK) {
+            bearStillValid = false;
+          }
+        }
+      }
+
+      if (!bullStillValid && !bearStillValid) continue;
+
       for (const htf of higherTfs) {
         const htfData = timeframes[htf];
-        const tolApp = htf === 'W' || htf === 'M' ? 0.012 : 0.015;
+        const tolApp = htf === 'W' || htf === 'M' ? 0.015 : 0.018;
         const tolBrk = (AUTOUR_OVERSHOOT_TOL_PCT[htf] || 1.2) / 100;
 
         const isNearBull = (level: number) =>
+          bullStillValid &&
+          level > 0 &&
           currentPrice >= level * (1 - tolBrk) &&
           (testBar.low < level
-            ? level - testBar.low <= currentPrice * tolBrk
-            : testBar.low - level <= currentPrice * tolApp ||
-              Math.abs(currentPrice - level) <= currentPrice * tolApp);
+            ? level - testBar.low <= testBar.close * (tolBrk * 1.15)
+            : testBar.low - level <= testBar.close * tolApp);
 
         const isNearBear = (level: number) =>
+          bearStillValid &&
+          level > 0 &&
           currentPrice <= level * (1 + tolBrk) &&
           (testBar.high > level
-            ? testBar.high - level <= currentPrice * tolBrk
-            : level - testBar.high <= currentPrice * tolApp ||
-              Math.abs(level - currentPrice) <= currentPrice * tolApp);
+            ? testBar.high - level <= testBar.close * (tolBrk * 1.15)
+            : level - testBar.high <= testBar.close * tolApp);
 
         // 1. Unpierced HTF Oggy & Jack baselines
         for (const line of flattenTimeframeBaselines(
@@ -817,16 +999,25 @@ function populateSetup1234Signals(
           }
         }
 
-        // 4. HTF Bollinger Lower / Upper Band
+        // 4. HTF Bollinger Lower / Upper Band (close & hlc3 typical price)
+        const hlcBB = hlc3BBByTf[htf];
         if (htfData.latestBB) {
+          const allowBullBB =
+            htfData.latestBB.lowerGreen ||
+            hlcBB?.lowerGreen ||
+            ((htf === 'W' || htf === 'M') &&
+              currentPrice > htfData.latestBB.lower);
           if (
-            htfData.latestBB.lowerGreen &&
-            isNearBull(htfData.latestBB.lower)
+            allowBullBB &&
+            (isNearBull(htfData.latestBB.lower) ||
+              (hlcBB ? isNearBull(hlcBB.lower) : false))
           ) {
             bullHits.push(`${htf}-BBLow`);
-          } else if (
-            !htfData.latestBB.upperGreen &&
-            isNearBear(htfData.latestBB.upper)
+          }
+          if (
+            (!htfData.latestBB.upperGreen &&
+              isNearBear(htfData.latestBB.upper)) ||
+            (hlcBB && !hlcBB.upperGreen && isNearBear(hlcBB.upper))
           ) {
             bearHits.push(`${htf}-BBHigh`);
           }
@@ -835,32 +1026,42 @@ function populateSetup1234Signals(
 
       if (bullHits.length > 0 || bearHits.length > 0) {
         bestSignalBarIdx = barIdx;
-        isBullSetup = bullHits.length >= bearHits.length;
+        isBullSetup =
+          currentPrice <= tfData.latestSMA20.value
+            ? bullHits.length > 0
+            : bearHits.length > bullHits.length
+            ? false
+            : true;
         chosenConfluences = isBullSetup ? bullHits : bearHits;
-        break;
+        if (chosenConfluences.length > 0) break;
       }
     }
 
-    if (bestSignalBarIdx < 0) continue;
+    if (bestSignalBarIdx < 0 || chosenConfluences.length === 0) continue;
 
     const signalBar = bars[bestSignalBarIdx];
-    const bbLen = tfData.bollingerBands.length;
-    const bbCurr = bbLen >= 1 ? tfData.bollingerBands[bbLen - 1] : null;
-    const bbPrev = bbLen >= 2 ? tfData.bollingerBands[bbLen - 2] : null;
+    const age = bars.length - 1 - bestSignalBarIdx;
+    const bbArr = tfData.bollingerBands;
 
-    // Étape 3 confirmation: opposite Bollinger Band turns inward
-    const isConfirmed = Boolean(
-      bbCurr &&
-        bbPrev &&
-        (isBullSetup
-          ? bbCurr.upper < bbPrev.upper
-          : bbCurr.lower > bbPrev.lower)
-    );
+    // Étape 3 confirmation: opposite Bollinger Band turned inward on any bar since trigger
+    let isConfirmed = false;
+    for (let lookback = 0; lookback <= Math.min(age + 1, 4); lookback++) {
+      const idx = bbArr.length - 1 - lookback;
+      if (idx >= 1) {
+        if (
+          isBullSetup
+            ? bbArr[idx].upper < bbArr[idx - 1].upper
+            : bbArr[idx].lower > bbArr[idx - 1].lower
+        ) {
+          isConfirmed = true;
+          break;
+        }
+      }
+    }
 
     const tp1Sma7 = tfData.latestSMA7.value;
     const tp2Sma20 = tfData.latestSMA20.value;
 
-    // Check if TP1 (SMA7) or TP2 (SMA20) have already been reached since signal bar
     let tp1Hit = false;
     let tp2Hit = false;
     for (let k = bestSignalBarIdx; k < bars.length; k++) {
@@ -878,7 +1079,9 @@ function populateSetup1234Signals(
       isBull: isBullSetup,
       signalBarTime: signalBar.time,
       signalPriceLevel: isBullSetup ? signalBar.low : signalBar.high,
-      confluenceText: Array.from(new Set(chosenConfluences)).slice(0, 5).join(', '),
+      confluenceText: Array.from(new Set(chosenConfluences))
+        .slice(0, 5)
+        .join(', '),
       tp1Sma7,
       tp2Sma20,
       tp1Hit,
@@ -1043,12 +1246,14 @@ export function computeAllTimeframesATS(
   downsideDidi: DidiTarget | null;
 } {
   const timeframes = {} as Record<Timeframe, TimeframeATSData>;
+  const recentDailyBars = resampledBars.D.slice(-16);
 
   for (const tf of ALL_TIMEFRAMES) {
     timeframes[tf] = calculateTimeframeATS(
       resampledBars[tf],
       currentPrice,
-      tf
+      tf,
+      recentDailyBars
     );
   }
 

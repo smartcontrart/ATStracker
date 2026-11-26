@@ -31,7 +31,7 @@ export const THEMATIC_STOCK_LISTS: Record<
     description: 'Lanceurs, satellites et infrastructures spatiales (SPATIAL.itf)',
     tickers: [
       'RKLB', 'ASTS', 'LUNR', 'RDW', 'PL', 'BKSY', 'SPIR', 'IRDM',
-      'VSAT', 'GSAT', 'SATS', 'KTOS', 'LHX', 'LMT', 'NOC', 'RTX',
+      'VSAT', 'GSAT', 'SATS', 'KTOS', 'KBR', 'LHX', 'LMT', 'NOC', 'RTX',
     ],
   },
   thematic_semis: {
@@ -50,7 +50,7 @@ export const THEMATIC_STOCK_LISTS: Record<
     description: 'Robotique chirurgicale, logistique et automatisation (ROBOTIQUE.itf)',
     tickers: [
       'ISRG', 'SYM', 'ROK', 'TER', 'ABB', 'CGNX', 'ZBRA', 'SERV',
-      'PATH', 'NOVT', 'EMR', 'HON', 'TSLA', 'AUR', 'OUST', 'BOTZ',
+      'PATH', 'NOVT', 'CLPT', 'EMR', 'HON', 'TSLA', 'AUR', 'OUST', 'BOTZ',
     ],
   },
   thematic_quantum: {
@@ -96,7 +96,7 @@ export const THEMATIC_STOCK_LISTS: Record<
     label: '🔌 IA - Électricité',
     description: 'Réseaux électriques, transformateurs et énergie IA (IA_-_ÉLECTRICITÉ.itf)',
     tickers: [
-      'ETN', 'GEV', 'PWR', 'VRT', 'HUBB', 'NRG', 'VST', 'CEG', 'TLN',
+      'ETN', 'GEV', 'SU.PA', 'PWR', 'VRT', 'HUBB', 'NRG', 'VST', 'CEG', 'TLN',
       'POWL', 'MYRG', 'EME', 'FIX', 'FSLR', 'NXT', 'GNRC', 'BE', 'AES',
     ],
   },
@@ -197,8 +197,9 @@ export const SP500_TICKERS: readonly string[] = [
   'HSIC', 'CPB', 'MOS', 'APA', 'HII', 'FRT', 'TFX', 'PNW', 'BIO', 'MTCH',
   'WYNN', 'INCY', 'MHK', 'HAS', 'CZR', 'IVZ', 'PARA', 'FMC', 'BWA', 'DVA',
   'SOLV', 'QRVO', 'BEN', 'WBA', 'ETSY', 'MGM', 'NCLH', 'ENPH', 'SMCI', 'COIN',
-  'WDAY', 'TPL', 'LII', 'BA', 'SOFI', 'MRNA', 'EL', 'KHC', 'HRL', 'FDS',
-  'WDC', 'DASH', 'ANF', 'SPY', 'QQQ', 'IWM', 'DIA',
+  'WDAY', 'TPL', 'LII', 'BA', 'SOFI', 'HOOD', 'MELI', 'VEEV', 'CRSP', 'ANDE',
+  'KBR', 'CLPT', 'TCEHY', 'SU.PA', 'MRNA', 'EL', 'KHC', 'HRL', 'FDS',
+  'WDC', 'DASH', 'ANF', 'SPY', 'QQQ', 'IWM', 'DIA', '^DJI',
 ];
 
 export const UNIQUE_SP500_TICKERS: string[] = Array.from(new Set(SP500_TICKERS));
@@ -241,13 +242,13 @@ export const TOP_25_CRYPTO_TICKERS: string[] = TOP_100_CRYPTO_TICKERS.slice(0, 2
  * Top 50 Free-Floating USD & Major Global Forex Pairs (Yahoo Finance =X convention).
  */
 export const TOP_50_FOREX_TICKERS: string[] = [
-  'EURUSD=X', 'GBPUSD=X', 'USDJPY=X', 'AUDUSD=X', 'USDCAD=X',
+  'DX-Y.NYB', 'EURUSD=X', 'GBPUSD=X', 'USDJPY=X', 'AUDUSD=X', 'USDCAD=X',
   'USDCHF=X', 'NZDUSD=X', 'USDSEK=X', 'USDNOK=X', 'USDDKK=X',
   'USDSGD=X', 'EURSEK=X', 'USDCNH=X', 'USDINR=X', 'USDKRW=X',
   'USDTWD=X', 'USDTHB=X', 'USDIDR=X', 'USDMYR=X', 'USDPHP=X',
   'USDMXN=X', 'USDBRL=X', 'USDCLP=X', 'USDCOP=X', 'USDPEN=X',
   'USDZAR=X', 'USDTRY=X', 'USDPLN=X', 'USDCZK=X', 'USDHUF=X',
-  'USDILS=X', 'USDRON=X', 'EURNOK=X', 'GBPNZD=X',
+  'USDILS=X', 'EURNOK=X', 'GBPNZD=X',
   'EURGBP=X', 'EURJPY=X', 'GBPJPY=X', 'AUDJPY=X', 'CADJPY=X',
   'CHFJPY=X', 'NZDJPY=X', 'EURAUD=X', 'EURCAD=X', 'EURCHF=X',
   'EURNZD=X', 'GBPAUD=X', 'GBPCAD=X', 'GBPCHF=X', 'AUDCAD=X',

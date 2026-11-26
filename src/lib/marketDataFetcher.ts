@@ -43,6 +43,22 @@ export function normalizeTickerForCategory(
 } {
   const cleaned = rawTicker.trim().toUpperCase();
 
+  // Special handling for DXY (US Dollar Index) & Dow Jones (^DJI)
+  if (cleaned === 'DXY' || cleaned === 'DX-Y.NYB' || cleaned === 'DX=F') {
+    return {
+      querySymbol: 'DX-Y.NYB',
+      displaySymbol: 'DXY',
+      baseCoin: 'DXY',
+    };
+  }
+  if (cleaned === 'DJI' || cleaned === '^DJI') {
+    return {
+      querySymbol: '^DJI',
+      displaySymbol: 'DJI',
+      baseCoin: 'DJI',
+    };
+  }
+
   if (category === 'forex') {
     const lettersOnly = cleaned.replace(/=X$/i, '').replace(/[^A-Z]/g, '');
     if (lettersOnly.length === 6) {
@@ -75,7 +91,9 @@ export function normalizeTickerForCategory(
     };
   }
 
-  const stockSym = cleaned.replace(/\./g, '-');
+  // Preserve international exchange suffixes (.PA, .DE, .AS, .L, .TO, .HK, .SW, etc.)
+  // Only convert US share-class dots (e.g. BRK.B -> BRK-B, BF.A -> BF-A)
+  const stockSym = cleaned.replace(/^([A-Z0-9]+)\.([AB])$/, '$1-$2');
   return {
     querySymbol: stockSym,
     displaySymbol: stockSym,
@@ -134,17 +152,59 @@ async function fetchYahooFinanceSeries(
     throw new Error(`No valid OHLCV bars parsed for ${querySymbol}`);
   }
 
-  const lastBar = sanitized[sanitized.length - 1];
-  const prevBar =
+  let lastBar = sanitized[sanitized.length - 1];
+  let prevBar =
     sanitized.length >= 2 ? sanitized[sanitized.length - 2] : lastBar;
 
   const metaPrice = Number(chartResult.meta?.regularMarketPrice);
   const livePrice =
     Number.isFinite(metaPrice) && metaPrice > 0 ? metaPrice : lastBar.close;
 
-  lastBar.close = livePrice;
-  lastBar.high = Math.max(lastBar.high, livePrice);
-  lastBar.low = Math.min(lastBar.low, livePrice);
+  const metaDayHigh = Number(chartResult.meta?.regularMarketDayHigh);
+  const metaDayLow = Number(chartResult.meta?.regularMarketDayLow);
+  const rawMarketTime = chartResult.meta?.regularMarketTime;
+  const metaIsoDate = rawMarketTime
+    ? new Date(
+        typeof rawMarketTime === 'number' ? rawMarketTime * 1000 : rawMarketTime
+      )
+        .toISOString()
+        .slice(0, 10)
+    : null;
+
+  if (metaIsoDate && metaIsoDate > lastBar.time) {
+    // Live session on a new calendar day not yet in historical quotes (e.g. Euronext .PA / intraday)
+    const openEst = lastBar.close;
+    const highEst =
+      Number.isFinite(metaDayHigh) && metaDayHigh > 0
+        ? Math.max(metaDayHigh, livePrice, openEst)
+        : Math.max(openEst, livePrice);
+    const lowEst =
+      Number.isFinite(metaDayLow) && metaDayLow > 0
+        ? Math.min(metaDayLow, livePrice, openEst)
+        : Math.min(openEst, livePrice);
+    prevBar = lastBar;
+    lastBar = {
+      time: metaIsoDate,
+      open: openEst,
+      high: highEst,
+      low: lowEst,
+      close: livePrice,
+      volume: Number(chartResult.meta?.regularMarketVolume) || 0,
+    };
+    sanitized.push(lastBar);
+  } else {
+    lastBar.close = livePrice;
+    lastBar.high = Math.max(
+      lastBar.high,
+      livePrice,
+      Number.isFinite(metaDayHigh) && metaDayHigh > 0 ? metaDayHigh : livePrice
+    );
+    lastBar.low = Math.min(
+      lastBar.low,
+      livePrice,
+      Number.isFinite(metaDayLow) && metaDayLow > 0 ? metaDayLow : livePrice
+    );
+  }
 
   const computedChangePct =
     prevBar.close > 0 ? ((livePrice - prevBar.close) / prevBar.close) * 100 : 0;
