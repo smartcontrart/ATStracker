@@ -664,10 +664,15 @@ export function detectAtsSetup(assetData: {
       const rank =
         triggerRank * 100 + htfRank * 15 + Math.min(14, matchedLevels.length);
 
-      const phase3HookedInward =
+      const oppositeHookedInward =
         side === 'BUY'
           ? currBB.upper < prevBB.upper
           : currBB.lower > prevBB.lower;
+      const stillActivelyBreakingOut =
+        (side === 'BUY' ? livePrice < currBB.lower : livePrice > currBB.upper) &&
+        currBB.bandwidth >= prevBB.bandwidth;
+      const phase3HookedInward =
+        oppositeHookedInward && !stillActivelyBreakingOut;
       const phase2Diverging =
         currBB.upper > prevBB.upper && currBB.lower < prevBB.lower;
 

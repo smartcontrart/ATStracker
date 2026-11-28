@@ -939,11 +939,12 @@ function populateSetup1234Signals(
           ? tfData.bollingerBands[bbIdx]
           : tfData.latestBB;
 
-      // For historical bars (lb > 0), strictly require Bollinger Band excess per setup1234.pine lines 374 & 376
+      // Strictly require an actual Bollinger Band exit/touch on EVERY bar (including live bar lb === 0)
+      const validBB = Boolean(bbAtBar && bbAtBar.upper > bbAtBar.lower);
       let bullStillValid =
-        lb === 0 || Boolean(bbAtBar && testBar.low <= bbAtBar.lower * 1.002);
+        validBB && Boolean(bbAtBar && testBar.low <= bbAtBar.lower * 1.002);
       let bearStillValid =
-        lb === 0 || Boolean(bbAtBar && testBar.high >= bbAtBar.upper * 0.998);
+        validBB && Boolean(bbAtBar && testBar.high >= bbAtBar.upper * 0.998);
 
       if (lb > 0) {
         const bullInvalidFloor = testBar.low * 0.995;
@@ -1090,33 +1091,60 @@ function populateSetup1234Signals(
     const bbCurr = bbArr.length >= 1 ? bbArr[bbArr.length - 1] : null;
     const bbPrev = bbArr.length >= 2 ? bbArr[bbArr.length - 2] : null;
 
-    // Étape 3 confirmation: opposite Bollinger Band curving inward on CURRENT bar
-    const isConfirmed = Boolean(
+    // Step 2 (Phase 3) confirmation: opposite Bollinger Band visibly curving inward on CURRENT bar
+    // (cannot confirm if price is still closing outside the outer band on a fresh live crash/spike bar)
+    const oppositeHookedInward = Boolean(
       bbCurr &&
         bbPrev &&
         (isBullSetup
           ? bbCurr.upper < bbPrev.upper
           : bbCurr.lower > bbPrev.lower)
     );
+    const isFreshBreakoutBar =
+      bestSignalBarIdx === bars.length - 1 &&
+      Boolean(
+        bbCurr &&
+          (isBullSetup
+            ? signalBar.close < bbCurr.lower
+            : signalBar.close > bbCurr.upper)
+      );
+    const isConfirmed = oppositeHookedInward && !isFreshBreakoutBar;
 
     const tp1Sma7 = tfData.latestSMA7.value;
     const tp2Sma20 = tfData.latestSMA20.value;
 
+    // Strict chronological 1 -> 2 -> 3 -> 4 progression:
+    // - Step 3 (M7) and Step 4 (M20) can ONLY happen AFTER Step 2 is confirmed,
+    //   and ONLY on bars strictly AFTER the signal bar (k > bestSignalBarIdx) — never using
+    //   the pre-drop high (or pre-rally low) of the signal bar itself!
+    // - Step 4 (M20) strictly requires Step 3 (M7) to have been reached first.
     let tp1Hit = false;
     let tp2Hit = false;
-    for (let k = bestSignalBarIdx; k < bars.length; k++) {
-      if (isBullSetup) {
-        if (bars[k].high >= tp1Sma7) tp1Hit = true;
-        if (bars[k].high >= tp2Sma20) tp2Hit = true;
-      } else {
-        if (bars[k].low <= tp1Sma7) tp1Hit = true;
-        if (bars[k].low <= tp2Sma20) tp2Hit = true;
+    if (isConfirmed) {
+      for (let k = bestSignalBarIdx + 1; k < bars.length; k++) {
+        if (isBullSetup) {
+          if (!tp1Hit && bars[k].high >= tp1Sma7) tp1Hit = true;
+          if (tp1Hit && bars[k].high >= tp2Sma20) tp2Hit = true;
+        } else {
+          if (!tp1Hit && bars[k].low <= tp1Sma7) tp1Hit = true;
+          if (tp1Hit && bars[k].low <= tp2Sma20) tp2Hit = true;
+        }
+      }
+      // If signal occurred on the live bar itself, only count M7/M20 if live CLOSE actually rebounded there
+      if (bestSignalBarIdx === bars.length - 1) {
+        if (isBullSetup) {
+          if (signalBar.close >= tp1Sma7) tp1Hit = true;
+          if (tp1Hit && signalBar.close >= tp2Sma20) tp2Hit = true;
+        } else {
+          if (signalBar.close <= tp1Sma7) tp1Hit = true;
+          if (tp1Hit && signalBar.close <= tp2Sma20) tp2Hit = true;
+        }
       }
     }
 
     const stepNumber: 1 | 2 | 3 | 4 = !isConfirmed
       ? 1
-      : tp2Hit
+      : tp1Hit && tp2Hit
       ? 4
       : tp1Hit
       ? 3
