@@ -1,3 +1,5 @@
+import { RUSSELL_2000_TICKERS } from '../data/russell2000.ts';
+import { STOXX_600_TICKERS } from '../data/stoxx600.ts';
 import type { AssetCategory } from '../types/ats.ts';
 
 /**
@@ -205,59 +207,14 @@ export const SP500_TICKERS: readonly string[] = [
 export const UNIQUE_SP500_TICKERS: string[] = Array.from(new Set(SP500_TICKERS));
 
 /**
- * Built-in STOXX Europe 600 core tickers (used as fallback if the daily GitHub Actions snapshot
- * has not been generated yet; the daily Action dynamically fetches all ~600 constituents via iShares EXSA).
+ * Full STOXX Europe 600 constituent list (599 verified Yahoo Finance tickers in src/data/stoxx600.ts).
  */
-export const STOXX_600_FALLBACK_TICKERS: string[] = [
-  // France (.PA)
-  'MC.PA', 'OR.PA', 'RMS.PA', 'TTE.PA', 'SAN.PA', 'AIR.PA', 'SU.PA', 'AI.PA',
-  'SAF.PA', 'EL.PA', 'BNP.PA', 'CS.PA', 'DG.PA', 'SGO.PA', 'BN.PA', 'DSY.PA',
-  'CAP.PA', 'KER.PA', 'LR.PA', 'HO.PA', 'PUB.PA', 'ORA.PA', 'GLE.PA', 'ACA.PA',
-  'ENGI.PA', 'VIE.PA', 'RI.PA', 'ML.PA', 'STMPA.PA', 'EN.PA', 'EDEN.PA', 'ALO.PA',
-  // Germany (.DE)
-  'SAP.DE', 'SIE.DE', 'ALV.DE', 'DTE.DE', 'MUV2.DE', 'MBG.DE', 'BMW.DE', 'VOW3.DE',
-  'BAS.DE', 'IFX.DE', 'DHL.DE', 'ADS.DE', 'RHM.DE', 'DB1.DE', 'DBK.DE', 'CBK.DE',
-  'SHL.DE', 'ENR.DE', 'EOAN.DE', 'RWE.DE', 'BAYN.DE', 'MRK.DE', 'BEI.DE', 'HEI.DE',
-  'MTX.DE', 'FRE.DE', 'HNR1.DE', 'CON.DE', 'SY1.DE', 'ZAL.DE',
-  // UK (.L)
-  'AZN.L', 'SHEL.L', 'HSBA.L', 'ULVR.L', 'REL.L', 'BP.L', 'GSK.L', 'RIO.L',
-  'DGE.L', 'BATS.L', 'LSEG.L', 'GLEN.L', 'RR.L', 'BA.L', 'BARC.L', 'LLOY.L',
-  'NWG.L', 'NG.L', 'CPG.L', 'III.L', 'EXPN.L', 'AHT.L', 'PRU.L', 'RKT.L',
-  'SSE.L', 'TSCO.L', 'VOD.L', 'HLN.L', 'AAL.L', 'STAN.L',
-  // Switzerland (.SW)
-  'NESN.SW', 'NOVN.SW', 'ROG.SW', 'UBSG.SW', 'ABBN.SW', 'ZURN.SW', 'CFR.SW',
-  'HOLN.SW', 'SIKA.SW', 'ALCON.SW', 'LONN.SW', 'GIVN.SW', 'SREN.SW', 'PGHN.SW', 'SCMN.SW',
-  // Netherlands (.AS)
-  'ASML.AS', 'PRX.AS', 'INGA.AS', 'ADYEN.AS', 'WKL.AS', 'AD.AS', 'HEIA.AS',
-  'PHIA.AS', 'DSM.AS', 'ASM.AS', 'BESI.AS', 'KPN.AS', 'NN.AS', 'AKZA.AS',
-  // Italy (.MI) & Spain (.MC)
-  'UCG.MI', 'ISP.MI', 'ENEL.MI', 'RACE.MI', 'ENI.MI', 'G.MI', 'STLAM.MI', 'LDO.MI', 'PRY.MI',
-  'ITX.MC', 'IBE.MC', 'SAN.MC', 'BBVA.MC', 'AMS.MC', 'TEF.MC', 'FER.MC', 'CLNX.MC', 'AENA.MC',
-  // Nordics & Rest of Europe (.CO, .ST, .OL, .HE, .BR, .VI, .IR, .LS)
-  'NOVO-B.CO', 'DSV.CO', 'VWS.CO', 'ORSTED.CO', 'CARL-B.CO', 'MAERSK-B.CO',
-  'INVE-B.ST', 'ATCO-A.ST', 'VOLV-B.ST', 'ASSA-B.ST', 'ERIC-B.ST', 'SAND.ST', 'SEB-A.ST', 'ABB.ST',
-  'EQNR.OL', 'DNB.OL', 'NHY.OL', 'KOG.OL',
-  'NDA-FI.HE', 'NOKIA.HE', 'KNEBV.HE', 'SAMPO.HE', 'UPM.HE',
-  'ABI.BR', 'UCB.BR', 'ARGX.BR', 'KBC.BR',
-  'EBS.VI', 'OMV.VI', 'RYA.IR', 'EDP.LS',
-];
+export const STOXX_600_FALLBACK_TICKERS: string[] = STOXX_600_TICKERS;
 
 /**
- * Built-in Russell 2000 liquid core tickers (used as fallback before the daily GitHub Actions
- * snapshot runs; the daily Action dynamically fetches all ~2,000 constituents via iShares IWM).
+ * Full Russell 2000 constituent list (1,977 verified Yahoo Finance tickers in src/data/russell2000.ts).
  */
-export const RUSSELL_2000_FALLBACK_TICKERS: string[] = [
-  'FTAI', 'SFM', 'INSM', 'FN', 'PCVX', 'MLI', 'ATI', 'CRS', 'ENS', 'SPXC',
-  'BMI', 'MOG-A', 'CWST', 'KTB', 'AIT', 'UFPI', 'BCC', 'MATX', 'BCPC', 'EXPO',
-  'FELE', 'ABM', 'MWA', 'NPO', 'DY', 'PRIM', 'IESC', 'MOD', 'TTEK', 'AWI',
-  'ZWS', 'GMS', 'SKY', 'MTH', 'TMHC', 'KBH', 'MHO', 'LGIH', 'CVCO', 'GRBK',
-  'CSWI', 'FSS', 'SANM', 'PLXS', 'RMBS', 'ACLS', 'AEIS', 'COHU', 'DIOD', 'SLAB',
-  'SITM', 'SMTC', 'ALRM', 'APPF', 'BOX', 'CVLT', 'QLYS', 'TENB', 'VRNS', 'WK',
-  'CORT', 'HALO', 'ITCI', 'KRYS', 'RARE', 'RDNT', 'TMDX', 'TGTX', 'VRNA', 'GKOS',
-  'CADE', 'FBP', 'FFIN', 'GBCI', 'HOMB', 'IBOC', 'ONB', 'OZK', 'PB', 'SNV',
-  'UBSI', 'UMBF', 'VLY', 'WSFS', 'CALM', 'ANDE', 'SHAK', 'TXRH', 'WING', 'ELF',
-  'BOOT', 'ANF', 'CROX', 'URBN', 'AEO', 'CHRD', 'MTDR', 'MUR', 'SM', 'CIVI',
-];
+export const RUSSELL_2000_FALLBACK_TICKERS: string[] = RUSSELL_2000_TICKERS;
 
 export const MASTER_STOCKS_UNIVERSE: string[] = Array.from(
   new Set([

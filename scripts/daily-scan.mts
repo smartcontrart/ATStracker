@@ -312,79 +312,143 @@ function normalizeEuropeanTicker(
 }
 
 async function resolveRussell2000Tickers(prevUniverses?: Record<string, string[]>): Promise<string[]> {
-  const rows = await fetchISharesCSVWithAutoDiscovery(
-    [
-      'https://www.ishares.com/us/products/239710/ishares-russell-2000-etf/1467271812596.ajax?fileType=csv&fileName=IWM_holdings&dataType=fund',
-    ],
-    ['https://www.ishares.com/us/products/239710/ishares-russell-2000-etf'],
-    'Russell 2000 (IWM)'
-  );
-
-  const tickers = new Set<string>();
-  for (const row of rows) {
-    if (!isEquityRow(row)) continue;
-    const raw = getField(row, ['Ticker', 'Emittententicker']);
-    const norm = normalizeUSTicker(raw);
-    if (norm) tickers.add(norm);
+  // Always start from our committed 1,977-stock Russell 2000 list so we NEVER fall back to 100 tickers,
+  // and merge in any fresh tickers from the public GitHub Russell2000 CSV if reachable.
+  const tickers = new Set<string>(RUSSELL_2000_FALLBACK_TICKERS);
+  if (prevUniverses?.russell2000) {
+    for (const s of prevUniverses.russell2000) tickers.add(s);
   }
 
-  if (tickers.size >= 500) {
-    console.log(`[constituents] Russell 2000 resolved: ${tickers.size} unique tickers`);
-    return Array.from(tickers);
-  }
-
-  if (prevUniverses?.russell2000 && prevUniverses.russell2000.length >= 200) {
-    console.warn(
-      `[constituents] Using previous scan-data Russell 2000 list (${prevUniverses.russell2000.length} tickers)`
+  try {
+    const csv = await fetchTextWithTimeout(
+      'https://raw.githubusercontent.com/quanthero/US_Indices_Constituents/main/Russell2000.csv'
     );
-    return prevUniverses.russell2000;
+    const lines = csv.trim().split(/\r?\n/).slice(1);
+    for (const ln of lines) {
+      const cols = parseCSVLine(ln);
+      const norm = normalizeUSTicker(cols[1] || '');
+      if (norm) tickers.add(norm);
+    }
+  } catch (err) {
+    console.warn(
+      `[constituents] Russell 2000 live CSV fetch skipped (${
+        err instanceof Error ? err.message : String(err)
+      }); using committed list (${tickers.size} tickers)`
+    );
   }
 
-  console.warn(
-    `[constituents] Falling back to built-in Russell 2000 core list (${RUSSELL_2000_FALLBACK_TICKERS.length} tickers)`
-  );
-  return RUSSELL_2000_FALLBACK_TICKERS;
+  console.log(`[constituents] Russell 2000 resolved: ${tickers.size} unique tickers`);
+  return Array.from(tickers).sort();
 }
 
 async function resolveStoxx600Tickers(prevUniverses?: Record<string, string[]>): Promise<string[]> {
-  const rows = await fetchISharesCSVWithAutoDiscovery(
-    [
-      'https://www.ishares.com/uk/individual/en/products/251931/ishares-stoxx-europe-600-ucits-etf-de-fund/1506575576011.ajax?fileType=csv&fileName=EXSA_holdings&dataType=fund',
-      'https://www.ishares.com/de/privatanleger/en/products/251931/ishares-stoxx-europe-600-ucits-etf-de-fund/1478358465952.ajax?fileType=csv&fileName=EXSA_holdings&dataType=fund',
-    ],
-    [
-      'https://www.ishares.com/uk/individual/en/products/251931/ishares-stoxx-europe-600-ucits-etf-de-fund',
-      'https://www.ishares.com/de/privatanleger/en/products/251931/ishares-stoxx-europe-600-ucits-etf-de-fund',
-    ],
-    'STOXX Europe 600 (EXSA)'
-  );
-
-  const tickers = new Set<string>();
-  for (const row of rows) {
-    if (!isEquityRow(row)) continue;
-    const raw = getField(row, ['Ticker', 'Emittententicker']);
-    const exchange = getField(row, ['Exchange', 'Börse']);
-    const location = getField(row, ['Location', 'Standort']);
-    const norm = normalizeEuropeanTicker(raw, exchange, location);
-    if (norm) tickers.add(norm);
+  // Primary: daily-updated open STOXX Europe 600 CSV with exact Yahoo Finance tickers (600 stocks)
+  try {
+    const csv = await fetchTextWithTimeout(
+      'https://raw.githubusercontent.com/chinobing/historical_sxxp_constituents/main/stoxx_europe_600_constituents.csv'
+    );
+    const lines = csv.trim().split(/\r?\n/).slice(1);
+    const liveTickers = new Set<string>();
+    for (const ln of lines) {
+      const cols = parseCSVLine(ln);
+      const sym = (cols[1] || '').trim().toUpperCase();
+      if (sym && /^[A-Z0-9-]+\.[A-Z]{1,3}$/.test(sym)) {
+        liveTickers.add(sym);
+      }
+    }
+    if (liveTickers.size >= 450) {
+      console.log(
+        `[constituents] STOXX Europe 600 resolved via live CSV: ${liveTickers.size} unique tickers`
+      );
+      return Array.from(liveTickers).sort();
+    }
+  } catch (err) {
+    console.warn(
+      `[constituents] STOXX 600 live CSV fetch skipped (${
+        err instanceof Error ? err.message : String(err)
+      })`
+    );
   }
 
-  if (tickers.size >= 300) {
-    console.log(`[constituents] STOXX Europe 600 resolved: ${tickers.size} unique tickers`);
-    return Array.from(tickers);
-  }
-
-  if (prevUniverses?.stoxx600 && prevUniverses.stoxx600.length >= 200) {
+  if (prevUniverses?.stoxx600 && prevUniverses.stoxx600.length >= 450) {
     console.warn(
       `[constituents] Using previous scan-data STOXX 600 list (${prevUniverses.stoxx600.length} tickers)`
     );
     return prevUniverses.stoxx600;
   }
 
-  console.warn(
-    `[constituents] Falling back to built-in STOXX Europe 600 core list (${STOXX_600_FALLBACK_TICKERS.length} tickers)`
+  console.log(
+    `[constituents] Using committed STOXX Europe 600 list (${STOXX_600_FALLBACK_TICKERS.length} tickers)`
   );
   return STOXX_600_FALLBACK_TICKERS;
+}
+
+/**
+ * Compacts inactive (NO SETUP / INVALIDATED) rows so a 3,100-stock snapshot stays around ~1.8-2.4 MB
+ * uncompressed (~250 KB gzipped) — safely below Vercel's 4.5 MB serverless response limit!
+ * Active setups (Step 1 & Step 2) retain 100% full detail, and clicking any stock loads full live charts.
+ */
+function compactResultForSnapshot(r: ScreenerResult): ScreenerResult {
+  const isActive =
+    r.atsState === 'STEP 1: THE WALL' ||
+    r.atsState === 'STEP 2: REVERSAL CONFIRMED';
+  if (isActive) {
+    // Still trim unrendered array duplicates on active rows while keeping every displayed field intact
+    const slimMatrix = {} as ScreenerResult['horizonMatrix'];
+    for (const [tf, h] of Object.entries(r.horizonMatrix) as Array<
+      [keyof ScreenerResult['horizonMatrix'], ScreenerResult['horizonMatrix']['D']]
+    >) {
+      slimMatrix[tf] = {
+        ...h,
+        greenLines: h.greenLines.slice(0, 3),
+        redLines: h.redLines.slice(0, 3),
+        wallTouches: h.wallTouches.slice(0, 2),
+      };
+    }
+    return {
+      ...r,
+      horizonMatrix: slimMatrix,
+      confluentWallLines: [],
+      confluentResistanceLines: [],
+      nearestGreenSupport: null,
+      nearestRedResistance: null,
+    };
+  }
+
+  const minimalMatrix = {} as ScreenerResult['horizonMatrix'];
+  for (const [tf, h] of Object.entries(r.horizonMatrix) as Array<
+    [keyof ScreenerResult['horizonMatrix'], ScreenerResult['horizonMatrix']['D']]
+  >) {
+    minimalMatrix[tf] = {
+      timeframe: h.timeframe,
+      greenCount: h.greenCount,
+      redCount: h.redCount,
+      oggyCount: h.oggyCount,
+      piercedCount: h.piercedCount,
+      greenLines: [],
+      redLines: [],
+      wallTouches: [],
+      bbState: h.bbState,
+      sarState: h.sarState,
+      m7Price: null,
+      m20Price: null,
+    };
+  }
+
+  return {
+    ...r,
+    horizonMatrix: minimalMatrix,
+    confluentWallLines: [],
+    confluentResistanceLines: [],
+    nearestGreenSupport: null,
+    nearestRedResistance: null,
+    Didi: null,
+    downsideDidi: null,
+    effectiveTargetTP1: null,
+    macroTargetTP2: null,
+    thesisHeadline: 'NO SETUP',
+    reasoningBullets: [],
+  };
 }
 
 function sleep(ms: number) {
@@ -419,7 +483,7 @@ async function scanCategory(params: {
           const payload = await buildMTFAssetPayload(sym, category, {
             fastScan: true,
           });
-          results.push(payload.screener);
+          results.push(compactResultForSnapshot(payload.screener));
           success = true;
           break;
         } catch {

@@ -53,7 +53,7 @@ jobs:
             --out scan-output \
             --prev .prev-scan-data \
             --categories "$CATEGORIES" \
-            --concurrency 6
+            --concurrency 8
 
       - name: Preserve untouched category snapshots
         run: |

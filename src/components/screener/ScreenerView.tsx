@@ -135,6 +135,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
   const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
   const [visibleLimit, setVisibleLimit] = useState<number>(60);
   const [snapshotLoading, setSnapshotLoading] = useState<boolean>(false);
+  const [snapshotReason, setSnapshotReason] = useState<string | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -248,6 +249,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
         if (fresh) qs.set('fresh', '1');
         const res = await fetch(`/api/snapshot?${qs.toString()}`);
         if (!res.ok) {
+          setSnapshotReason(`HTTP ${res.status}`);
           markSnapshotChecked(category);
           return false;
         }
@@ -257,6 +259,7 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
           Array.isArray(json.results) &&
           json.results.length > 0
         ) {
+          setSnapshotReason(null);
           loadSnapshot(category, {
             scannedAt: json.scannedAt || new Date().toISOString(),
             universes: json.universes || {},
@@ -264,9 +267,13 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
           });
           return true;
         }
+        setSnapshotReason(json?.reason || 'snapshot_unavailable');
         markSnapshotChecked(category);
         return false;
-      } catch {
+      } catch (err) {
+        setSnapshotReason(
+          err instanceof Error ? err.message : 'snapshot_fetch_error'
+        );
         markSnapshotChecked(category);
         return false;
       } finally {
@@ -291,7 +298,9 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
       }
       if (!cancelled) {
         const syms = getActiveSymbolsForCategory(activeCategory);
-        void runProgressiveUniverseScan(activeCategory, syms, true);
+        // Never browser-scan 3,000+ stocks sequentially if snapshot isn't loaded yet; cap live fallback at 200
+        const cappedSyms = syms.length > 200 ? syms.slice(0, 200) : syms;
+        void runProgressiveUniverseScan(activeCategory, cappedSyms, true);
       }
     })();
 
@@ -575,13 +584,23 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
             <Badge variant="support" className="font-mono">
               BB EXIT + HTF S/R
             </Badge>
-            {dataSource[activeCategory] === 'snapshot' && (
+            {dataSource[activeCategory] === 'snapshot' ? (
               <Badge
                 variant="outline"
                 className="font-mono text-[10px] border-sky-300 bg-sky-50 text-sky-800"
               >
                 DAILY SNAPSHOT · INSTANT
               </Badge>
+            ) : (
+              snapshotReason && (
+                <Badge
+                  variant="outline"
+                  title={`Daily snapshot fallback reason: ${snapshotReason}`}
+                  className="font-mono text-[10px] border-amber-300 bg-amber-50 text-amber-800 cursor-help"
+                >
+                  LIVE FALLBACK ({snapshotReason.slice(0, 32)})
+                </Badge>
+              )
             )}
           </div>
           <p className="mt-1 text-xs text-slate-600 sm:text-sm">
