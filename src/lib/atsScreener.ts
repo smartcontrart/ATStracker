@@ -623,17 +623,40 @@ export function detectAtsSetup(assetData: {
     if (bars.length < 2 || bbArr.length < 2) continue;
 
     const curBar = bars[bars.length - 1];
+    const prevBar = bars[bars.length - 2];
     const currBB = bbArr[bbArr.length - 1];
     const prevBB = bbArr[bbArr.length - 2];
     if (currBB.upper <= currBB.lower) continue;
 
-    // Check if price gets out of the Bollinger Band by the BOTTOM or by the TOP on `triggerTf`
+    const m7 = tfData.latestSMA7?.value ?? currBB.mid;
+    const m20 = tfData.latestSMA20?.value ?? currBB.mid;
+
+    // Check if price exited the Bollinger Band on the current bar OR held a prior-bar exit
+    // while STILL before TP1 (M7 / M20) — so Step 2 bounces off HTF S/R are detected before M7 is hit!
+    const curExitedBottom =
+      livePrice < currBB.lower || curBar.low <= currBB.lower * 1.002;
+    const prevExitedBottomHeld =
+      prevBar.low <= prevBB.lower * 1.002 &&
+      curBar.low >= prevBar.low * 0.99 &&
+      livePrice >= prevBar.low * 0.99;
+    const stillBeforeBullTP1 =
+      livePrice <= currBB.lower * 1.015 ||
+      livePrice < Math.min(m7, m20) * 1.002;
+
+    const curExitedTop =
+      livePrice > currBB.upper || curBar.high >= currBB.upper * 0.998;
+    const prevExitedTopHeld =
+      prevBar.high >= prevBB.upper * 0.998 &&
+      curBar.high <= prevBar.high * 1.01 &&
+      livePrice <= prevBar.high * 1.01;
+    const stillBeforeBearTP1 =
+      livePrice >= currBB.upper * 0.985 ||
+      livePrice > Math.max(m7, m20) * 0.998;
+
     const exitedBottom =
-      livePrice < currBB.lower ||
-      (curBar.low < currBB.lower && livePrice <= currBB.lower * 1.015);
+      (curExitedBottom || prevExitedBottomHeld) && stillBeforeBullTP1;
     const exitedTop =
-      livePrice > currBB.upper ||
-      (curBar.high > currBB.upper && livePrice >= currBB.upper * 0.985);
+      (curExitedTop || prevExitedTopHeld) && stillBeforeBearTP1;
 
     if (!exitedBottom && !exitedTop) continue;
 
@@ -644,8 +667,12 @@ export function detectAtsSetup(assetData: {
     for (const side of sidesToCheck) {
       const refExtremePrice =
         side === 'BUY'
-          ? Math.min(curBar.low, livePrice)
-          : Math.max(curBar.high, livePrice);
+          ? curExitedBottom
+            ? Math.min(curBar.low, livePrice)
+            : Math.min(prevBar.low, curBar.low, livePrice)
+          : curExitedTop
+          ? Math.max(curBar.high, livePrice)
+          : Math.max(prevBar.high, curBar.high, livePrice);
 
       const { matchedLevels, matchedBaselines } = findHigherTimeframeSR({
         triggerTf,
