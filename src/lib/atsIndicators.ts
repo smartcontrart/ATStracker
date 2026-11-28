@@ -10,6 +10,7 @@ import type {
   OggyMatrix,
   OHLCVBar,
   ParabolicSARPoint,
+  SetupStepMarker,
   Timeframe,
   TimeframeATSData,
   TimeframeSetup1234,
@@ -1088,56 +1089,116 @@ function populateSetup1234Signals(
 
     const signalBar = bars[bestSignalBarIdx];
     const bbArr = tfData.bollingerBands;
-    const bbCurr = bbArr.length >= 1 ? bbArr[bbArr.length - 1] : null;
-    const bbPrev = bbArr.length >= 2 ? bbArr[bbArr.length - 2] : null;
-
-    // Step 2 (Phase 3) confirmation: opposite Bollinger Band visibly curving inward on CURRENT bar
-    // (cannot confirm if price is still closing outside the outer band on a fresh live crash/spike bar)
-    const oppositeHookedInward = Boolean(
-      bbCurr &&
-        bbPrev &&
-        (isBullSetup
-          ? bbCurr.upper < bbPrev.upper
-          : bbCurr.lower > bbPrev.lower)
-    );
-    const isFreshBreakoutBar =
-      bestSignalBarIdx === bars.length - 1 &&
-      Boolean(
-        bbCurr &&
-          (isBullSetup
-            ? signalBar.close < bbCurr.lower
-            : signalBar.close > bbCurr.upper)
-      );
-    const isConfirmed = oppositeHookedInward && !isFreshBreakoutBar;
+    const sma7Offset = bars.length - tfData.sma7.length;
 
     const tp1Sma7 = tfData.latestSMA7.value;
     const tp2Sma20 = tfData.latestSMA20.value;
 
-    // Strict chronological 1 -> 2 -> 3 -> 4 progression:
-    // - Step 3 (M7) and Step 4 (M20) can ONLY happen AFTER Step 2 is confirmed,
-    //   and ONLY on bars strictly AFTER the signal bar (k > bestSignalBarIdx) — never using
-    //   the pre-drop high (or pre-rally low) of the signal bar itself!
-    // - Step 4 (M20) strictly requires Step 3 (M7) to have been reached first.
+    // Build strictly chronological milestone sequence: [1], [1,2], [1,2,3], or [1,2,3,4]
+    // Every higher step ALWAYS keeps the earlier step markers visible on their own bars!
+    const steps: SetupStepMarker[] = [
+      {
+        step: 1,
+        time: signalBar.time,
+        price: isBullSetup ? signalBar.low : signalBar.high,
+      },
+    ];
+
+    // Step 2 (Phase 3): First bar at or after Step 1 where the opposite BB hooks inward
+    // (cannot fire on a fresh live breakout bar still closing outside the outer band)
+    let step2BarIdx = -1;
+    for (let k = bestSignalBarIdx; k < bars.length; k++) {
+      const bbKIdx = k - bbOffset;
+      if (bbKIdx < 1 || bbKIdx >= bbArr.length) continue;
+      const bbK = bbArr[bbKIdx];
+      const bbKPrev = bbArr[bbKIdx - 1];
+      const oppositeHooked = isBullSetup
+        ? bbK.upper < bbKPrev.upper
+        : bbK.lower > bbKPrev.lower;
+      const freshOutside =
+        k === bestSignalBarIdx &&
+        (isBullSetup ? bars[k].close < bbK.lower : bars[k].close > bbK.upper);
+      if (oppositeHooked && !freshOutside) {
+        step2BarIdx = k;
+        steps.push({
+          step: 2,
+          time: bars[k].time,
+          price: isBullSetup ? bars[k].low : bars[k].high,
+        });
+        break;
+      }
+    }
+
+    const isConfirmed = step2BarIdx >= 0;
+
+    // Step 3 (M7 / Bille 1) & Step 4 (M20 / Bille 2):
+    // Strictly sequential — Step 3 requires Step 2 first; Step 4 requires Step 3 first!
     let tp1Hit = false;
     let tp2Hit = false;
+    let step3BarIdx = -1;
+
     if (isConfirmed) {
-      for (let k = bestSignalBarIdx + 1; k < bars.length; k++) {
-        if (isBullSetup) {
-          if (!tp1Hit && bars[k].high >= tp1Sma7) tp1Hit = true;
-          if (tp1Hit && bars[k].high >= tp2Sma20) tp2Hit = true;
-        } else {
-          if (!tp1Hit && bars[k].low <= tp1Sma7) tp1Hit = true;
-          if (tp1Hit && bars[k].low <= tp2Sma20) tp2Hit = true;
+      const step3Start = Math.max(bestSignalBarIdx + 1, step2BarIdx);
+      for (let k = step3Start; k < bars.length; k++) {
+        const s7Idx = k - sma7Offset;
+        const m7AtK =
+          s7Idx >= 0 && s7Idx < tfData.sma7.length
+            ? tfData.sma7[s7Idx].value
+            : tp1Sma7;
+        const hitM7 = isBullSetup
+          ? bars[k].high >= m7AtK
+          : bars[k].low <= m7AtK;
+        if (hitM7) {
+          tp1Hit = true;
+          step3BarIdx = k;
+          steps.push({
+            step: 3,
+            time: bars[k].time,
+            price: isBullSetup ? bars[k].high : bars[k].low,
+          });
+          break;
         }
       }
-      // If signal occurred on the live bar itself, only count M7/M20 if live CLOSE actually rebounded there
-      if (bestSignalBarIdx === bars.length - 1) {
-        if (isBullSetup) {
-          if (signalBar.close >= tp1Sma7) tp1Hit = true;
-          if (tp1Hit && signalBar.close >= tp2Sma20) tp2Hit = true;
-        } else {
-          if (signalBar.close <= tp1Sma7) tp1Hit = true;
-          if (tp1Hit && signalBar.close <= tp2Sma20) tp2Hit = true;
+      // If Step 1 & Step 2 occurred on the live bar itself, only mark Step 3 if live CLOSE reached M7
+      if (!tp1Hit && bestSignalBarIdx === bars.length - 1) {
+        const closeHitM7 = isBullSetup
+          ? signalBar.close >= tp1Sma7
+          : signalBar.close <= tp1Sma7;
+        if (closeHitM7) {
+          tp1Hit = true;
+          step3BarIdx = bestSignalBarIdx;
+          steps.push({
+            step: 3,
+            time: signalBar.time,
+            price: signalBar.close,
+          });
+        }
+      }
+
+      if (tp1Hit && step3BarIdx >= 0) {
+        for (let k = step3BarIdx; k < bars.length; k++) {
+          const s20Idx = k - sma20Offset;
+          const m20AtK =
+            s20Idx >= 0 && s20Idx < tfData.sma20.length
+              ? tfData.sma20[s20Idx].value
+              : tp2Sma20;
+          const hitM20 =
+            k === bestSignalBarIdx
+              ? isBullSetup
+                ? bars[k].close >= m20AtK
+                : bars[k].close <= m20AtK
+              : isBullSetup
+              ? bars[k].high >= m20AtK
+              : bars[k].low <= m20AtK;
+          if (hitM20) {
+            tp2Hit = true;
+            steps.push({
+              step: 4,
+              time: bars[k].time,
+              price: isBullSetup ? bars[k].high : bars[k].low,
+            });
+            break;
+          }
         }
       }
     }
@@ -1153,6 +1214,7 @@ function populateSetup1234Signals(
     tfData.setup1234 = {
       status: isConfirmed ? 'CONFIRMED' : 'CANDIDATE',
       stepNumber,
+      steps,
       isBull: isBullSetup,
       signalBarTime: signalBar.time,
       signalPriceLevel: isBullSetup ? signalBar.low : signalBar.high,

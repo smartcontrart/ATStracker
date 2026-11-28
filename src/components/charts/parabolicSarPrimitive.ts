@@ -47,11 +47,16 @@ interface ScreenHorizontalRay {
   dash: number[];
 }
 
+interface ScreenStepBadge {
+  step: 1 | 2 | 3 | 4;
+  x: number;
+  y: number;
+  /** true = place badge below price (e.g. Buy 1/2 or Sell 3/4), false = above price */
+  placeBelow: boolean;
+}
+
 interface ScreenSetupOverlay {
-  signalX: number | null;
-  signalY: number | null;
-  status: 'CONFIRMED' | 'CANDIDATE';
-  stepNumber: 1 | 2 | 3 | 4;
+  steps: ScreenStepBadge[];
   isBull: boolean;
   targetX: number;
   bille1Y: number | null; // SMA 7
@@ -197,33 +202,53 @@ class ParabolicSARPaneRenderer implements ISeriesPrimitivePaneRenderer {
           drawBlackBall(ov.bille2Y, 'M20');
         }
 
-        if (ov.signalX !== null && ov.signalY !== null) {
-          const badgeColor =
-            ov.stepNumber === 1
-              ? '#f97316' // Orange: Step 1 (Wall / Candidate)
-              : ov.isBull
-              ? '#16a34a' // Green: Buy Step 2, 3, or 4
-              : '#dc2626'; // Red: Sell Step 2, 3, or 4
+        // Draw every chronological step badge (1, 1->2, 1->2->3, or 1->2->3->4) on its own bar
+        // If two badges share the same bar and side (e.g., 1 & 2 on same bar), place side-by-side cleanly
+        const slotCounts = new Map<string, number>();
+        for (const s of ov.steps) {
+          const slotKey = `${Math.round(s.x)}:${s.placeBelow ? 'B' : 'A'}`;
+          slotCounts.set(slotKey, (slotCounts.get(slotKey) ?? 0) + 1);
+        }
+        const slotSeen = new Map<string, number>();
 
-          const yOffset = ov.isBull ? 16 : -16;
+        for (const s of ov.steps) {
+          const slotKey = `${Math.round(s.x)}:${s.placeBelow ? 'B' : 'A'}`;
+          const totalInSlot = slotCounts.get(slotKey) ?? 1;
+          const idxInSlot = slotSeen.get(slotKey) ?? 0;
+          slotSeen.set(slotKey, idxInSlot + 1);
+
+          const xShift =
+            totalInSlot > 1 ? (idxInSlot - (totalInSlot - 1) / 2) * 18 : 0;
+          const cx = Math.max(
+            11,
+            Math.min(mediaSize.width - 11, s.x + xShift)
+          );
+          const yOffset = s.placeBelow ? 15 : -15;
           const cy = Math.max(
             11,
-            Math.min(mediaSize.height - 11, ov.signalY + yOffset)
+            Math.min(mediaSize.height - 11, s.y + yOffset)
           );
 
+          const badgeColor =
+            s.step === 1
+              ? '#f97316' // Orange: Step 1 (The Wall)
+              : ov.isBull
+              ? '#16a34a' // Green: Buy Steps 2, 3, 4
+              : '#dc2626'; // Red: Sell Steps 2, 3, 4
+
           context.beginPath();
-          context.arc(ov.signalX, cy, 8.5, 0, Math.PI * 2);
+          context.arc(cx, cy, 8, 0, Math.PI * 2);
           context.fillStyle = badgeColor;
           context.fill();
           context.lineWidth = 1.5;
           context.strokeStyle = '#ffffff';
           context.stroke();
 
-          context.font = 'bold 11px ui-monospace, SFMono-Regular, monospace';
+          context.font = 'bold 10px ui-monospace, SFMono-Regular, monospace';
           context.fillStyle = '#ffffff';
           context.textAlign = 'center';
           context.textBaseline = 'middle';
-          context.fillText(String(ov.stepNumber), ov.signalX, cy + 0.5);
+          context.fillText(String(s.step), cx, cy + 0.5);
           context.textAlign = 'start';
           context.textBaseline = 'alphabetic';
         }
@@ -396,13 +421,34 @@ class ParabolicSARPaneView implements ISeriesPrimitivePaneView {
       const targetX =
         (lastX ?? chartWidth - 36) + Math.max(12, barSpacing * 1.8);
 
-      const sigX = setup.signalBarTime
-        ? timeScale.timeToCoordinate(setup.signalBarTime as Time)
-        : null;
-      const sigY =
-        setup.signalPriceLevel !== null
-          ? series.priceToCoordinate(setup.signalPriceLevel)
-          : null;
+      const rawSteps =
+        setup.steps && setup.steps.length > 0
+          ? setup.steps
+          : setup.signalBarTime && setup.signalPriceLevel !== null
+          ? [
+              {
+                step: 1 as const,
+                time: setup.signalBarTime,
+                price: setup.signalPriceLevel,
+              },
+            ]
+          : [];
+
+      const projectedSteps: ScreenStepBadge[] = [];
+      for (const st of rawSteps) {
+        const sx = timeScale.timeToCoordinate(st.time as Time);
+        const sy = series.priceToCoordinate(st.price);
+        if (sx === null || sy === null) continue;
+        // Buy: Steps 1 & 2 below the low, Steps 3 & 4 (M7/M20 hit) above the high
+        // Sell: Steps 1 & 2 above the high, Steps 3 & 4 (M7/M20 hit) below the low
+        const placeBelow = setup.isBull ? st.step <= 2 : st.step >= 3;
+        projectedSteps.push({
+          step: st.step,
+          x: sx,
+          y: sy,
+          placeBelow,
+        });
+      }
 
       const bille1Y =
         !setup.tp1Hit && setup.tp1Sma7 !== null
@@ -413,21 +459,8 @@ class ParabolicSARPaneView implements ISeriesPrimitivePaneView {
           ? series.priceToCoordinate(setup.tp2Sma20)
           : null;
 
-      const resolvedStep: 1 | 2 | 3 | 4 =
-        setup.stepNumber ??
-        (setup.status === 'CANDIDATE'
-          ? 1
-          : setup.tp2Hit
-          ? 4
-          : setup.tp1Hit
-          ? 3
-          : 2);
-
       this.screenOverlay = {
-        signalX: sigX,
-        signalY: sigY,
-        status: setup.status,
-        stepNumber: resolvedStep,
+        steps: projectedSteps,
         isBull: setup.isBull,
         targetX,
         bille1Y,

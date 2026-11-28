@@ -165,10 +165,18 @@ export interface DidiTarget {
   upsidePct: number;
 }
 
+export interface SetupStepMarker {
+  step: 1 | 2 | 3 | 4;
+  time: string;
+  price: number;
+}
+
 export interface TimeframeSetup1234 {
   status: 'CONFIRMED' | 'CANDIDATE' | 'NONE';
-  /** Chronological ATS Setup 1-2-3-4 step: 1=Wall/Candidate, 2=Phase 3 Confirmed, 3=M7 Hit, 4=M20 Hit */
+  /** Highest chronological ATS Setup 1-2-3-4 step reached: 1=Wall, 2=Phase 3, 3=M7 Hit, 4=M20 Hit */
   stepNumber?: 1 | 2 | 3 | 4 | null;
+  /** Chronological milestone markers (strictly [1], [1,2], [1,2,3], or [1,2,3,4]) */
+  steps?: SetupStepMarker[];
   isBull: boolean;
   signalBarTime: string | null;
   signalPriceLevel: number | null;

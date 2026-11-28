@@ -564,6 +564,14 @@ export const ATSChart: React.FC<ATSChartProps> = ({
                 ? 3
                 : 2);
             const sideTag = data.setup1234.isBull ? 'BUY' : 'SELL';
+            const stepChain =
+              stepNum === 1
+                ? '1'
+                : stepNum === 2
+                ? '1→2'
+                : stepNum === 3
+                ? '1→2→3'
+                : '1→2→3→4';
             return (
               <Badge
                 variant={
@@ -575,7 +583,7 @@ export const ATSChart: React.FC<ATSChartProps> = ({
                 }
                 className="text-[10px] py-0 px-1.5 font-mono font-bold"
               >
-                STEP {stepNum} · {sideTag}
+                STEP {stepChain} · {sideTag}
               </Badge>
             );
           })()}
