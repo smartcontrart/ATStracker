@@ -501,39 +501,21 @@ function findHigherTimeframeSR(params: {
       }
     }
 
-    // 5. Higher-Timeframe Bollinger Bands — STRICT color polarity + HTF "Autour" curve halo:
-    //    Green (rising) = Support (BUY only), Red (falling) = Resistance (SELL only)
+    // 5. Higher-Timeframe Bollinger Bands — STRICT band role + color polarity:
+    //    BUY Support = ONLY Green (rising) LOWER BB; SELL Resistance = ONLY Red (falling) UPPER BB.
+    //    (A Green Upper BB is NOT a Buy support, and a Red Lower BB is NOT a Sell resistance.)
     if (htfData.latestBB) {
       const { upper, lower, upperGreen, lowerGreen } = htfData.latestBB;
       if (side === 'BUY') {
         if (lower > 0 && lowerGreen && lower <= livePrice * (1 + curveOvershoot)) {
           const distLive = Math.abs(livePrice - lower) / livePrice;
           const distExt = Math.abs(refExtremePrice - lower) / livePrice;
-          if (
-            distLive <= proximityTol ||
-            distExt <= proximityTol
-          ) {
+          if (distLive <= proximityTol || distExt <= proximityTol) {
             matchedLevels.push({
               label: `${htf}-BB Low`,
               timeframe: htf,
               kind: 'BB',
               price: lower,
-              distancePct: distLive * 100,
-            });
-          }
-        }
-        if (upper > 0 && upperGreen && upper <= livePrice * (1 + curveOvershoot)) {
-          const distLive = Math.abs(livePrice - upper) / livePrice;
-          const distExt = Math.abs(refExtremePrice - upper) / livePrice;
-          if (
-            distLive <= proximityTol ||
-            distExt <= proximityTol
-          ) {
-            matchedLevels.push({
-              label: `${htf}-BB Up`,
-              timeframe: htf,
-              kind: 'BB',
-              price: upper,
               distancePct: distLive * 100,
             });
           }
@@ -542,31 +524,12 @@ function findHigherTimeframeSR(params: {
         if (upper > 0 && !upperGreen && upper >= livePrice * (1 - curveOvershoot)) {
           const distLive = Math.abs(upper - livePrice) / livePrice;
           const distExt = Math.abs(upper - refExtremePrice) / livePrice;
-          if (
-            distLive <= proximityTol ||
-            distExt <= proximityTol
-          ) {
+          if (distLive <= proximityTol || distExt <= proximityTol) {
             matchedLevels.push({
               label: `${htf}-BB Up`,
               timeframe: htf,
               kind: 'BB',
               price: upper,
-              distancePct: distLive * 100,
-            });
-          }
-        }
-        if (lower > 0 && !lowerGreen && lower >= livePrice * (1 - curveOvershoot)) {
-          const distLive = Math.abs(lower - livePrice) / livePrice;
-          const distExt = Math.abs(lower - refExtremePrice) / livePrice;
-          if (
-            distLive <= proximityTol ||
-            distExt <= proximityTol
-          ) {
-            matchedLevels.push({
-              label: `${htf}-BB Low`,
-              timeframe: htf,
-              kind: 'BB',
-              price: lower,
               distancePct: distLive * 100,
             });
           }
