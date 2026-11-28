@@ -167,6 +167,8 @@ export interface DidiTarget {
 
 export interface TimeframeSetup1234 {
   status: 'CONFIRMED' | 'CANDIDATE' | 'NONE';
+  /** Chronological ATS Setup 1-2-3-4 step: 1=Wall/Candidate, 2=Phase 3 Confirmed, 3=M7 Hit, 4=M20 Hit */
+  stepNumber?: 1 | 2 | 3 | 4 | null;
   isBull: boolean;
   signalBarTime: string | null;
   signalPriceLevel: number | null;

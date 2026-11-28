@@ -51,6 +51,7 @@ interface ScreenSetupOverlay {
   signalX: number | null;
   signalY: number | null;
   status: 'CONFIRMED' | 'CANDIDATE';
+  stepNumber: 1 | 2 | 3 | 4;
   isBull: boolean;
   targetX: number;
   bille1Y: number | null; // SMA 7
@@ -198,22 +199,33 @@ class ParabolicSARPaneRenderer implements ISeriesPrimitivePaneRenderer {
 
         if (ov.signalX !== null && ov.signalY !== null) {
           const badgeColor =
-            ov.status === 'CONFIRMED'
-              ? ov.isBull
-                ? '#16a34a'
-                : '#dc2626'
-              : '#f97316';
+            ov.stepNumber === 1
+              ? '#f97316' // Orange: Step 1 (Wall / Candidate)
+              : ov.isBull
+              ? '#16a34a' // Green: Buy Step 2, 3, or 4
+              : '#dc2626'; // Red: Sell Step 2, 3, or 4
 
-          const yOffset = ov.isBull ? 14 : -14;
-          const cy = ov.signalY + yOffset;
+          const yOffset = ov.isBull ? 16 : -16;
+          const cy = Math.max(
+            11,
+            Math.min(mediaSize.height - 11, ov.signalY + yOffset)
+          );
 
           context.beginPath();
-          context.arc(ov.signalX, cy, 5.5, 0, Math.PI * 2);
+          context.arc(ov.signalX, cy, 8.5, 0, Math.PI * 2);
           context.fillStyle = badgeColor;
           context.fill();
           context.lineWidth = 1.5;
           context.strokeStyle = '#ffffff';
           context.stroke();
+
+          context.font = 'bold 11px ui-monospace, SFMono-Regular, monospace';
+          context.fillStyle = '#ffffff';
+          context.textAlign = 'center';
+          context.textBaseline = 'middle';
+          context.fillText(String(ov.stepNumber), ov.signalX, cy + 0.5);
+          context.textAlign = 'start';
+          context.textBaseline = 'alphabetic';
         }
       }
 
@@ -401,10 +413,21 @@ class ParabolicSARPaneView implements ISeriesPrimitivePaneView {
           ? series.priceToCoordinate(setup.tp2Sma20)
           : null;
 
+      const resolvedStep: 1 | 2 | 3 | 4 =
+        setup.stepNumber ??
+        (setup.status === 'CANDIDATE'
+          ? 1
+          : setup.tp2Hit
+          ? 4
+          : setup.tp1Hit
+          ? 3
+          : 2);
+
       this.screenOverlay = {
         signalX: sigX,
         signalY: sigY,
         status: setup.status,
+        stepNumber: resolvedStep,
         isBull: setup.isBull,
         targetX,
         bille1Y,

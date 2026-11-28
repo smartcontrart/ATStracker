@@ -553,23 +553,32 @@ export const ATSChart: React.FC<ATSChartProps> = ({
             {TIMEFRAME_LABELS[data.timeframe]}
           </span>
 
-          {data.setup1234.status === 'CONFIRMED' && (
-            <Badge
-              variant={data.setup1234.isBull ? 'support' : 'resistance'}
-              className="text-[10px] py-0 px-1.5 font-mono"
-            >
-              {data.setup1234.isBull ? '● SETUP VERT' : '● SETUP ROUGE'}
-            </Badge>
-          )}
-
-          {data.setup1234.status === 'CANDIDATE' && (
-            <Badge
-              variant="amber"
-              className="text-[10px] py-0 px-1.5 font-mono"
-            >
-              ● CANDIDAT ORANGE
-            </Badge>
-          )}
+          {data.setup1234.status !== 'NONE' && (() => {
+            const stepNum: 1 | 2 | 3 | 4 =
+              data.setup1234.stepNumber ??
+              (data.setup1234.status === 'CANDIDATE'
+                ? 1
+                : data.setup1234.tp2Hit
+                ? 4
+                : data.setup1234.tp1Hit
+                ? 3
+                : 2);
+            const sideTag = data.setup1234.isBull ? 'BUY' : 'SELL';
+            return (
+              <Badge
+                variant={
+                  stepNum === 1
+                    ? 'amber'
+                    : data.setup1234.isBull
+                    ? 'support'
+                    : 'resistance'
+                }
+                className="text-[10px] py-0 px-1.5 font-mono font-bold"
+              >
+                STEP {stepNum} · {sideTag}
+              </Badge>
+            );
+          })()}
         </div>
 
         <div className="flex items-center gap-1.5 text-[11px] font-mono">

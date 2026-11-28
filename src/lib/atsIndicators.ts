@@ -1114,8 +1114,17 @@ function populateSetup1234Signals(
       }
     }
 
+    const stepNumber: 1 | 2 | 3 | 4 = !isConfirmed
+      ? 1
+      : tp2Hit
+      ? 4
+      : tp1Hit
+      ? 3
+      : 2;
+
     tfData.setup1234 = {
       status: isConfirmed ? 'CONFIRMED' : 'CANDIDATE',
+      stepNumber,
       isBull: isBullSetup,
       signalBarTime: signalBar.time,
       signalPriceLevel: isBullSetup ? signalBar.low : signalBar.high,
