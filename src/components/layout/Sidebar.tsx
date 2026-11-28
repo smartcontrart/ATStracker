@@ -57,7 +57,38 @@ export const Sidebar: React.FC<SidebarProps> = ({
     screenerResults,
     screenerLoading,
     uiPreferences,
+    setStateFilter,
   } = useATSStore();
+
+  const activeStateFilter = uiPreferences.stateFilter || 'ALL';
+  const step1On =
+    activeStateFilter === 'STEP1' || activeStateFilter === 'ACTIVE';
+  const step2On =
+    activeStateFilter === 'STEP2' || activeStateFilter === 'ACTIVE';
+
+  const handleToggleStep1 = () => {
+    if (step1On && step2On) setStateFilter('STEP2');
+    else if (step1On && !step2On) setStateFilter('ALL');
+    else if (!step1On && step2On) setStateFilter('ACTIVE');
+    else setStateFilter('STEP1');
+  };
+
+  const handleToggleStep2 = () => {
+    if (step2On && step1On) setStateFilter('STEP1');
+    else if (step2On && !step1On) setStateFilter('ALL');
+    else if (!step2On && step1On) setStateFilter('ACTIVE');
+    else setStateFilter('STEP2');
+  };
+
+  const categoryStepCounts = useMemo(() => {
+    let s1 = 0;
+    let s2 = 0;
+    for (const r of screenerResults[activeCategory]) {
+      if (r.atsState === 'STEP 1: THE WALL') s1++;
+      else if (r.atsState === 'STEP 2: REVERSAL CONFIRMED') s2++;
+    }
+    return { s1, s2 };
+  }, [activeCategory, screenerResults]);
 
   const countActiveSetups = (list: typeof screenerResults.stocks) =>
     list.filter(
@@ -90,7 +121,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
       compareScreenerResults(a, b, uiPreferences.sortBy || 'STATE')
     );
     if (scanned.length > 0) {
-      return scanned.slice(0, 25).map((r) => ({
+      const filtered = scanned.filter((r) => {
+        if (activeStateFilter === 'ACTIVE') {
+          return (
+            r.atsState === 'STEP 1: THE WALL' ||
+            r.atsState === 'STEP 2: REVERSAL CONFIRMED'
+          );
+        }
+        if (activeStateFilter === 'STEP1') {
+          return r.atsState === 'STEP 1: THE WALL';
+        }
+        if (activeStateFilter === 'STEP2') {
+          return r.atsState === 'STEP 2: REVERSAL CONFIRMED';
+        }
+        if (activeStateFilter === 'INVALIDATED') {
+          return r.atsState === 'INVALIDATED';
+        }
+        return true;
+      });
+      return filtered.slice(0, 40).map((r) => ({
         symbol: r.symbol,
         displaySymbol: r.displaySymbol,
         atsState: r.atsState as AtsState | null,
@@ -115,7 +164,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
       highestHtfTimeframe: null as Timeframe | null,
       score: 0,
     }));
-  }, [activeCategory, screenerResults, uiPreferences.sortBy, watchlists]);
+  }, [
+    activeCategory,
+    activeStateFilter,
+    screenerResults,
+    uiPreferences.sortBy,
+    watchlists,
+  ]);
 
   return (
     <aside className="flex w-full flex-col border-b border-slate-200 bg-white lg:sticky lg:top-0 lg:h-screen lg:w-64 xl:w-72 lg:shrink-0 lg:border-b-0 lg:border-r">
@@ -207,7 +262,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Ranked Active Setups List */}
       <div className="hidden lg:flex lg:flex-1 lg:flex-col border-t border-slate-200 p-3 overflow-y-auto">
-        <div className="flex items-center justify-between px-2 pb-2">
+        <div className="flex items-center justify-between px-2 pb-1.5">
           <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
             <Compass className="h-3 w-3 text-emerald-600" />
             {CATEGORY_HIT_TITLES[activeCategory]}
@@ -215,7 +270,52 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span className="text-[10px] font-mono text-slate-400">State</span>
         </div>
 
+        {/* Compact Step 1 / Step 2 Filter Bar */}
+        <div className="mb-2 flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-100 p-0.5">
+          <button
+            type="button"
+            onClick={() => setStateFilter('ALL')}
+            className={cn(
+              'flex-1 rounded px-1.5 py-0.5 text-[10px] font-semibold transition-colors',
+              activeStateFilter === 'ALL'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            )}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            onClick={handleToggleStep1}
+            className={cn(
+              'flex-1 rounded px-1.5 py-0.5 text-[10px] font-semibold transition-colors font-mono',
+              step1On
+                ? 'bg-amber-500 text-white shadow-sm'
+                : 'bg-white/70 text-slate-700 hover:bg-white'
+            )}
+          >
+            {step1On ? '✓' : ''}S1 ({categoryStepCounts.s1})
+          </button>
+          <button
+            type="button"
+            onClick={handleToggleStep2}
+            className={cn(
+              'flex-1 rounded px-1.5 py-0.5 text-[10px] font-semibold transition-colors font-mono',
+              step2On
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'bg-white/70 text-slate-700 hover:bg-white'
+            )}
+          >
+            {step2On ? '✓' : ''}S2 ({categoryStepCounts.s2})
+          </button>
+        </div>
+
         <div className="space-y-1">
+          {sidebarItems.length === 0 && screenerResults[activeCategory].length > 0 && (
+            <div className="px-2 py-4 text-center text-[11px] text-slate-400">
+              No setups match this step filter.
+            </div>
+          )}
           {sidebarItems.map((item, idx) => {
             const isCurrent =
               activeView === 'charts' &&
