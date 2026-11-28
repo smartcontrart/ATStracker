@@ -3,11 +3,12 @@ import type { Timeframe } from '@/types/ats';
 export type CrosshairSyncListener = (payload: {
   sourceTimeframe: Timeframe;
   hoveredDate: string | null;
+  hoveredPrice: number | null;
 }) => void;
 
 /**
- * Lightweight pub/sub bus for 60fps crosshair synchronization across all 6 ATS
- * timeframe panes without triggering React tree re-renders on mousemove.
+ * Lightweight pub/sub bus for 60fps TradingView-style 2D (time + price)
+ * crosshair synchronization across all 6 ATS timeframe panes.
  */
 export class CrosshairSyncBus {
   private listeners = new Map<Timeframe, CrosshairSyncListener>();
@@ -19,10 +20,14 @@ export class CrosshairSyncBus {
     };
   }
 
-  emit(sourceTimeframe: Timeframe, hoveredDate: string | null): void {
+  emit(
+    sourceTimeframe: Timeframe,
+    hoveredDate: string | null,
+    hoveredPrice: number | null = null
+  ): void {
     for (const [tf, listener] of this.listeners.entries()) {
       if (tf !== sourceTimeframe) {
-        listener({ sourceTimeframe, hoveredDate });
+        listener({ sourceTimeframe, hoveredDate, hoveredPrice });
       }
     }
   }

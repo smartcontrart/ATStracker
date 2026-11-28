@@ -949,7 +949,12 @@ export function evaluateATSScreener(params: {
       detection.setupSide === 'BUY' ? 'Support' : 'Resistance';
     const levelList = detection.matchedHtfLevels
       .slice(0, 4)
-      .map((l) => `${l.label} (${fmtNum(l.price, category)})`)
+      .map((l) => {
+        const signedPct =
+          livePrice > 0 ? ((l.price - livePrice) / livePrice) * 100 : 0;
+        const sign = signedPct >= 0 ? '+' : '';
+        return `${l.label} (${fmtNum(l.price, category)}, ${sign}${signedPct.toFixed(1)}%)`;
+      })
       .join(' + ');
 
     thesisHeadline = `${detection.setupSide} • ${detection.bbExitTimeframe} ${exitSideDesc} + ${detection.highestHtfTimeframe} ${srTypeDesc} [${levelList}]`;

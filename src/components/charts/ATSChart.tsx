@@ -439,7 +439,7 @@ export const ATSChart: React.FC<ATSChartProps> = ({
     preferences.showDidi,
   ]);
 
-  // 3. Crosshair Synchronization across D, W, M, 12M, 6M, 3M
+  // 3. TradingView-style 2D (Time + Price) Crosshair Synchronization across D, W, M, 12M, 6M, 3M
   useEffect(() => {
     const chart = chartRef.current;
     const barSeries = barSeriesRef.current;
@@ -450,26 +450,70 @@ export const ATSChart: React.FC<ATSChartProps> = ({
       barMap.set(b.time, b);
     }
 
-    const handleCrosshairMove = (param: { time?: Time }) => {
+    const normalizeChartTime = (t: Time | undefined): string | null => {
+      if (!t) return null;
+      if (typeof t === 'string') return t;
+      if (typeof t === 'number') {
+        return new Date(t * 1000).toISOString().slice(0, 10);
+      }
+      if (
+        typeof t === 'object' &&
+        'year' in t &&
+        'month' in t &&
+        'day' in t
+      ) {
+        const mm = String(t.month).padStart(2, '0');
+        const dd = String(t.day).padStart(2, '0');
+        return `${t.year}-${mm}-${dd}`;
+      }
+      return null;
+    };
+
+    const handleCrosshairMove = (param: {
+      time?: Time;
+      point?: { x: number; y: number };
+    }) => {
       if (isProgrammaticSyncRef.current) return;
 
-      if (!param.time) {
+      if (!param.point || param.point.x < 0 || param.point.y < 0) {
         setHudBar(data.bars.length > 0 ? data.bars[data.bars.length - 1] : null);
         if (preferences.syncCrosshair && syncBus) {
-          syncBus.emit(data.timeframe, null);
+          syncBus.emit(data.timeframe, null, null);
         }
         return;
       }
 
-      const dateStr = String(param.time);
-      const matched = barMap.get(dateStr);
+      const rawPrice = barSeries.coordinateToPrice(param.point.y);
+      const hoveredPrice =
+        rawPrice !== null && Number.isFinite(Number(rawPrice))
+          ? Number(rawPrice)
+          : null;
+
+      let dateStr = normalizeChartTime(param.time);
+      let matched: OHLCVBar | undefined = dateStr
+        ? barMap.get(dateStr)
+        : undefined;
+
+      // If cursor is in the empty right margin past the last bar, map to the nearest bar
+      if (!matched && data.bars.length > 0) {
+        const logical = chart.timeScale().coordinateToLogical(param.point.x);
+        if (logical !== null && Number.isFinite(logical)) {
+          const clampedIdx = Math.max(
+            0,
+            Math.min(data.bars.length - 1, Math.round(logical))
+          );
+          matched = data.bars[clampedIdx];
+          dateStr = matched.time;
+        }
+      }
+
       if (matched) {
         setHudBar(matched);
       }
 
-      if (preferences.syncCrosshair && syncBus) {
+      if (preferences.syncCrosshair && syncBus && dateStr) {
         const broadcastDate = matched ? matched.periodEnd : dateStr;
-        syncBus.emit(data.timeframe, broadcastDate);
+        syncBus.emit(data.timeframe, broadcastDate, hoveredPrice);
       }
     };
 
@@ -477,43 +521,50 @@ export const ATSChart: React.FC<ATSChartProps> = ({
 
     let unregisterBus: (() => void) | undefined;
     if (syncBus) {
-      unregisterBus = syncBus.register(data.timeframe, ({ hoveredDate }) => {
-        if (!preferences.syncCrosshair) return;
+      unregisterBus = syncBus.register(
+        data.timeframe,
+        ({ hoveredDate, hoveredPrice }) => {
+          if (!preferences.syncCrosshair) return;
 
-        isProgrammaticSyncRef.current = true;
-        try {
-          if (!hoveredDate) {
-            chart.clearCrosshairPosition();
-            setHudBar(
-              data.bars.length > 0 ? data.bars[data.bars.length - 1] : null
-            );
-            return;
-          }
+          isProgrammaticSyncRef.current = true;
+          try {
+            if (!hoveredDate) {
+              chart.clearCrosshairPosition();
+              setHudBar(
+                data.bars.length > 0 ? data.bars[data.bars.length - 1] : null
+              );
+              return;
+            }
 
-          const targetBar = findCorrespondingBarForDate(
-            hoveredDate,
-            data.timeframe,
-            data.bars
-          );
-          if (targetBar) {
-            chart.setCrosshairPosition(
-              targetBar.close,
-              targetBar.time as Time,
-              barSeries
+            const targetBar = findCorrespondingBarForDate(
+              hoveredDate,
+              data.timeframe,
+              data.bars
             );
-            setHudBar(targetBar);
+            if (targetBar) {
+              const targetPrice =
+                hoveredPrice !== null && Number.isFinite(hoveredPrice)
+                  ? hoveredPrice
+                  : targetBar.close;
+              chart.setCrosshairPosition(
+                targetPrice,
+                targetBar.time as Time,
+                barSeries
+              );
+              setHudBar(targetBar);
+            }
+          } finally {
+            isProgrammaticSyncRef.current = false;
           }
-        } finally {
-          isProgrammaticSyncRef.current = false;
         }
-      });
+      );
     }
 
     return () => {
       chart.unsubscribeCrosshairMove(handleCrosshairMove);
       unregisterBus?.();
     };
-  }, [data.bars, data.timeframe, preferences.syncCrosshair, syncBus]);
+  }, [category, data.bars, data.timeframe, preferences.syncCrosshair, syncBus]);
 
   const unpiercedLines = flattenTimeframeBaselines(
     data.Jack,

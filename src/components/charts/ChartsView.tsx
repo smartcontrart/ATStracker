@@ -515,25 +515,35 @@ export const ChartsView: React.FC<ChartsViewProps> = ({
               {payload.screener.matchedHtfLevels &&
                 payload.screener.matchedHtfLevels.length > 0 && (
                   <div className="flex flex-wrap items-center gap-1 pt-0.5 font-mono">
-                    {payload.screener.matchedHtfLevels.map((lvl, idx) => (
-                      <span
-                        key={`${lvl.label}-${idx}`}
-                        className={cn(
-                          'rounded border px-1.5 py-0.5 text-[10px] font-bold',
-                          lvl.kind === 'Oggy'
-                            ? 'border-blue-300 bg-blue-50 text-blue-800'
-                            : lvl.kind === 'SAR'
-                            ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
-                            : lvl.kind === 'MM7' || lvl.kind === 'MM20'
-                            ? 'border-sky-300 bg-sky-50 text-sky-900'
-                            : isShortSetup
-                            ? 'border-rose-300 bg-rose-50 text-rose-800'
-                            : 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                        )}
-                      >
-                        {lvl.label} ({formatPrice(lvl.price, payload.category)})
-                      </span>
-                    ))}
+                    {payload.screener.matchedHtfLevels.map((lvl, idx) => {
+                      const signedPct =
+                        payload.livePrice > 0
+                          ? ((lvl.price - payload.livePrice) /
+                              payload.livePrice) *
+                            100
+                          : 0;
+                      const pctStr = `${signedPct >= 0 ? '+' : ''}${signedPct.toFixed(1)}%`;
+                      return (
+                        <span
+                          key={`${lvl.label}-${idx}`}
+                          className={cn(
+                            'rounded border px-1.5 py-0.5 text-[10px] font-bold',
+                            lvl.kind === 'Oggy'
+                              ? 'border-blue-300 bg-blue-50 text-blue-800'
+                              : lvl.kind === 'SAR'
+                              ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
+                              : lvl.kind === 'MM7' || lvl.kind === 'MM20'
+                              ? 'border-sky-300 bg-sky-50 text-sky-900'
+                              : isShortSetup
+                              ? 'border-rose-300 bg-rose-50 text-rose-800'
+                              : 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                          )}
+                        >
+                          {lvl.label} ({formatPrice(lvl.price, payload.category)}{' '}
+                          · {pctStr})
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
             </div>

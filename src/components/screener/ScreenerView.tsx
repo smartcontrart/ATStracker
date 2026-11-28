@@ -1440,30 +1440,40 @@ export const ScreenerView: React.FC<ScreenerViewProps> = ({
                           {row.matchedHtfLevels &&
                           row.matchedHtfLevels.length > 0 ? (
                             <div className="flex flex-wrap gap-1 max-w-[200px]">
-                              {row.matchedHtfLevels.slice(0, 4).map((lvl, idx) => (
-                                <span
-                                  key={`${lvl.label}-${idx}`}
-                                  title={`${lvl.label} @ ${formatPrice(
-                                    lvl.price,
-                                    row.category
-                                  )} (${lvl.distancePct.toFixed(2)}% away)`}
-                                  className={cn(
-                                    'rounded border px-1.5 py-0.5 text-[10px] font-bold',
-                                    lvl.kind === 'Oggy'
-                                      ? 'border-blue-300 bg-blue-50 text-blue-800'
-                                      : lvl.kind === 'SAR'
-                                      ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
-                                      : lvl.kind === 'MM7' ||
-                                        lvl.kind === 'MM20'
-                                      ? 'border-sky-300 bg-sky-50 text-sky-900'
-                                      : isSell
-                                      ? 'border-rose-300 bg-rose-50 text-rose-800'
-                                      : 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                                  )}
-                                >
-                                  {lvl.label}
-                                </span>
-                              ))}
+                              {row.matchedHtfLevels.slice(0, 4).map((lvl, idx) => {
+                                const signedPct =
+                                  row.livePrice > 0
+                                    ? ((lvl.price - row.livePrice) /
+                                        row.livePrice) *
+                                      100
+                                    : 0;
+                                const pctStr = `${signedPct >= 0 ? '+' : ''}${signedPct.toFixed(1)}%`;
+                                return (
+                                  <span
+                                    key={`${lvl.label}-${idx}`}
+                                    title={`${lvl.label} @ ${formatPrice(
+                                      lvl.price,
+                                      row.category
+                                    )} (${pctStr} from current price)`}
+                                    className={cn(
+                                      'rounded border px-1.5 py-0.5 text-[10px] font-bold',
+                                      lvl.kind === 'Oggy'
+                                        ? 'border-blue-300 bg-blue-50 text-blue-800'
+                                        : lvl.kind === 'SAR'
+                                        ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
+                                        : lvl.kind === 'MM7' ||
+                                          lvl.kind === 'MM20'
+                                        ? 'border-sky-300 bg-sky-50 text-sky-900'
+                                        : isSell
+                                        ? 'border-rose-300 bg-rose-50 text-rose-800'
+                                        : 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                                    )}
+                                  >
+                                    {lvl.label}{' '}
+                                    <span className="opacity-75">{pctStr}</span>
+                                  </span>
+                                );
+                              })}
                               {row.matchedHtfLevels.length > 4 && (
                                 <span className="text-[10px] text-slate-500">
                                   +{row.matchedHtfLevels.length - 4}
