@@ -1,0 +1,29 @@
+{
+  "updatedAt": "2026-11-28T14:41:57.260Z",
+  "categories": {
+    "stocks": {
+      "scannedAt": "2026-11-28T14:45:32.912Z",
+      "totalScanned": 2623,
+      "activeSetupCount": 1036,
+      "failedCount": 542,
+      "universeCounts": {
+        "sp500": 513,
+        "stoxx600": 599,
+        "russell2000": 1977,
+        "thematic_all": 225
+      }
+    },
+    "crypto": {
+      "scannedAt": "2026-11-28T14:45:39.003Z",
+      "totalScanned": 100,
+      "activeSetupCount": 7,
+      "failedCount": 0
+    },
+    "forex": {
+      "scannedAt": "2026-11-28T14:45:43.599Z",
+      "totalScanned": 50,
+      "activeSetupCount": 36,
+      "failedCount": 0
+    }
+  }
+}
